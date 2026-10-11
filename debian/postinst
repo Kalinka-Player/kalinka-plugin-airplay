@@ -1,0 +1,6 @@
+#!/bin/sh
+set -e
+# The capability drop-in must be loaded before the server's restart trigger.
+if [ "$1" = configure ] && [ -d /run/systemd/system ]; then
+    systemctl daemon-reload
+fi

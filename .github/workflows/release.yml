@@ -1,0 +1,169 @@
+name: Release
+
+# Publishes, for a `kalinka-plugin-airplay-v*` tag or an existing tag via
+# workflow_dispatch, one .deb per distribution release and architecture, and
+# the source of the bundled shairport-sync and nqptp. The bundled binaries
+# link their distribution's FFmpeg and other libraries, whose sonames change
+# between releases, so each package installs only on the release it was built
+# on.
+
+on:
+  push:
+    tags:
+      - 'kalinka-plugin-airplay-v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing kalinka-plugin-airplay-v* tag to build and publish'
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  tests:
+    name: Tests
+    uses: ./.github/workflows/tests.yml
+    with:
+      ref: ${{ github.event.inputs.tag || github.ref }}
+
+  deb:
+    name: Deb (${{ matrix.image }}, ${{ matrix.arch }})
+    needs: tests
+    strategy:
+      fail-fast: false
+      matrix:
+        # Debian 12 and 13 cover Raspberry Pi OS and DietPi on the same bases.
+        image: ['debian:bookworm', 'debian:trixie', 'ubuntu:24.04']
+        arch: [amd64, arm64]
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    container:
+      image: ${{ matrix.image }}
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Install git
+        # git before checkout, or the action downloads a tarball without the
+        # history setuptools_scm reads the version from.
+        run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
+
+      - name: Checkout (tag)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Trust the workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - run: ./scripts/install-build-deps.sh
+
+      - name: Build pinned shairport-sync and nqptp
+        run: ./scripts/build-native.sh
+
+      - name: Build and inspect deb
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install build
+          PYTHON="$RUNNER_TEMP/venv/bin/python" ./scripts/build_deb.sh build/native
+          deb=$(ls kalinka-plugin-airplay_*_${{ matrix.arch }}.deb)
+          dpkg-deb --info "$deb"
+          dpkg-deb --contents "$deb"
+          case "$(dpkg-deb -f "$deb" Version)" in
+            *~dev*|*+g*) echo "$deb is not a release version; is $TAG on this commit?" >&2; exit 1 ;;
+          esac
+          mkdir -p out
+          mv "$deb" out/
+          cp build/native/*.tar.gz out/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb-${{ strategy.job-index }}
+          path: out/*
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: deb
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout (tag)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Download packages
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Gather packages, source and checksums
+        run: |
+          mkdir -p release
+          find artifacts \( -name '*.deb' -o -name '*.tar.gz' \) \
+            -exec cp -n {} release/ \;
+          (cd release && sha256sum * > SHA256SUMS)
+          ls -l release/
+          cat release/SHA256SUMS
+
+      - name: Create / update release and upload
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${TAG#kalinka-plugin-airplay-v}"
+          echo "Publishing $TAG"
+
+          # A CHANGELOG.md section for this version leads the notes when there
+          # is one; its absence never blocks a release.
+          : > notes.md
+          if [ -f CHANGELOG.md ]; then
+            awk -v want="## $VERSION" '
+              $0 == want { found = 1; next }
+              /^## / { found = 0 }
+              found
+            ' CHANGELOG.md >> notes.md
+          fi
+          if [ -s notes.md ]; then
+            printf '\n' >> notes.md
+          fi
+
+          # Read back from the package, so the notes never disagree with apt.
+          SDK=$(dpkg-deb -f release/*+trixie_amd64.deb Depends | tr ',' '\n' \
+            | sed -n 's/^ *\(kalinka-plugin-sdk .*\)$/\1/p' | paste -sd, - | sed 's/,/, /g')
+
+          cat >> notes.md <<EOF
+          ## Install
+
+          On the Kalinka server, install or upgrade to the latest release with:
+
+          \`\`\`sh
+          curl -fsSL https://raw.githubusercontent.com/$GITHUB_REPOSITORY/main/scripts/install-latest.sh | sudo bash
+          \`\`\`
+
+          It picks the package for the machine's distribution release and architecture. To install by hand, download the one for yours — the release is in the name: \`+trixie\` for Debian 13 and Raspberry Pi OS or DietPi based on it, \`+bookworm\` for those based on Debian 12, \`+noble\` for Ubuntu 24.04; \`arm64\` for a Raspberry Pi running a 64-bit OS, \`amd64\` for a PC — verify it with \`sha256sum -c SHA256SUMS --ignore-missing\`, and install it:
+
+          \`\`\`sh
+          sudo apt install ./kalinka-plugin-airplay_${VERSION}+trixie_arm64.deb
+          \`\`\`
+
+          Each package bundles shairport-sync 5.5.2 with AirPlay 2 and nqptp 1.2.8, whose source is attached here and shipped in the package, and requires \`${SDK}\`, which comes with a compatible Kalinka server. Keep a distribution \`shairport-sync\` or \`nqptp\` service disabled.
+          EOF
+
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "kalinka-plugin-airplay $VERSION" \
+              --notes-file notes.md \
+              --generate-notes
+          fi
+          gh release upload "$TAG" release/* --clobber --repo "$GITHUB_REPOSITORY"
+          # install-latest.sh installs the "latest" release: a manual run
+          # against an older tag must not take that from a newer one.
+          NEWEST=$(git tag --list 'kalinka-plugin-airplay-v*' --sort=-v:refname | head -n 1)
+          if [ "$TAG" = "$NEWEST" ]; then
+            gh release edit "$TAG" --latest --repo "$GITHUB_REPOSITORY"
+          fi

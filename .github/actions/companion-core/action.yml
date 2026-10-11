@@ -1,0 +1,12 @@
+name: Companion Kalinka core
+description: Check out the Kalinka core with SDK 3.11 (DirectPlaybackSession.show, live_capture) into ./core.
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v4
+      with:
+        repository: Kalinka-Player/KalinkaPlayer
+        # SDK 3.11 lives on this core branch until it is merged.
+        ref: airplay-input
+        path: core
+        fetch-depth: 0

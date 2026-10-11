@@ -1,0 +1,63 @@
+name: Tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+    inputs:
+      ref:
+        description: 'Commit or tag to test; the event ref when empty'
+        type: string
+        default: ''
+permissions:
+  contents: read
+jobs:
+  python:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+      - uses: ./.github/actions/companion-core
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install flac, which the segment and receiver tests run
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends flac
+      - name: Install companion core and plugin
+        run: |
+          python -m pip install -e core/packages/kalinka-plugin-sdk -e core/packages/kalinka-server -e '.[dev]'
+      - run: python -m ruff check src tests
+      - run: python -m pytest
+      - run: python -m build
+  deb:
+    runs-on: ubuntu-24.04
+    container:
+      image: debian:trixie
+    steps:
+      - name: Install build dependencies
+        # git before checkout, or the action downloads a tarball without the
+        # history setuptools_scm reads the version from.
+        run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+      - name: Trust the workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - run: ./scripts/install-build-deps.sh
+      - name: Build pinned shairport-sync and nqptp
+        run: ./scripts/build-native.sh
+      - name: Build and inspect Debian package
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install build
+          PYTHON="$RUNNER_TEMP/venv/bin/python" ./scripts/build_deb.sh build/native
+          dpkg-deb --info kalinka-plugin-airplay_*_amd64.deb
+          dpkg-deb --contents kalinka-plugin-airplay_*_amd64.deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kalinka-plugin-airplay-deb
+          path: kalinka-plugin-airplay_*_amd64.deb
+          if-no-files-found: error

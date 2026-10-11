@@ -1,0 +1,13 @@
+Package: kalinka-plugin-airplay
+Version: @VERSION@
+Section: python
+Priority: optional
+Architecture: @ARCH@
+Depends: kalinka-server, kalinka-plugin-sdk (>= 3.11), kalinka-plugin-sdk (<< 4), python3 (>= 3.11), flac, avahi-daemon, @SHLIBS_DEPENDS@
+Maintainer: Dmitry Savin <envelsavinds@gmail.com>
+Homepage: https://github.com/Kalinka-Player/kalinka-plugin-airplay
+Description: AirPlay receiver input for Kalinka Music Player
+ Server-side AirPlay plugin: an iPhone, iPad or Mac plays through Kalinka's
+ selected renderer, which pulls the audio from the server as a live FLAC
+ stream. Bundles shairport-sync 5.5.2 with AirPlay 2 and nqptp 1.2.8, with
+ their source.
