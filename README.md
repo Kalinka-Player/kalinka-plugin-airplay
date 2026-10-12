@@ -43,10 +43,10 @@ beyond Kalinka's existing live-stream support.
 
 ## Requirements
 
-Linux, Python 3.11+, and Kalinka **SDK 3.11** with its matching server: the
-server must implement `DirectPlaybackSession.show()` and the SDK must provide
-`kalinka_plugin_sdk.live_capture`. The renderer needs Kalinka's live FLAC
-support, which it has had since SDK 3.5.
+Linux, Python 3.11+, and Kalinka server **5.9 or newer**, which brings plugin
+SDK 3.11 (`DirectPlaybackSession.show()` and `kalinka_plugin_sdk.live_capture`).
+The package will not install on an older server. The renderer needs Kalinka's
+live FLAC support, which it has had since SDK 3.5.
 
 AirPlay 2 needs UDP ports 319 and 320 to itself for nqptp. When another PTP
 service holds them, or *Offer AirPlay 2* is off, Kalinka offers classic AirPlay

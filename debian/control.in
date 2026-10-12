@@ -10,4 +10,4 @@ Description: AirPlay receiver input for Kalinka Music Player
  Server-side AirPlay plugin: an iPhone, iPad or Mac plays through Kalinka's
  selected renderer, which pulls the audio from the server as a live FLAC
  stream. Bundles shairport-sync 5.5.2 with AirPlay 2 and nqptp 1.2.8, with
- their source.
+ their source. Requires Kalinka server 5.9 or newer (plugin SDK 3.11).

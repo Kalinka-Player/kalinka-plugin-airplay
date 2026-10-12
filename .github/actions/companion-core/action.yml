@@ -6,7 +6,7 @@ runs:
     - uses: actions/checkout@v4
       with:
         repository: Kalinka-Player/KalinkaPlayer
-        # SDK 3.11 lives on this core branch until it is merged.
-        ref: airplay-input
+        # The oldest server release with SDK 3.11.
+        ref: kalinka-v5.9.0
         path: core
         fetch-depth: 0
