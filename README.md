@@ -23,9 +23,12 @@ beyond Kalinka's existing live-stream support.
 - **Segments.** Each unbroken run of the sender's audio is one FLAC stream: a
   `flac` process per segment, buffered in an SDK `LiveCapture`. A pause, seek or
   takeover ends the segment and the next audio starts a new one, so nothing
-  stale is ever heard. The buffer lets go of what the renderer has read, so a
-  segment may run for hours: *Stream buffer limit* bounds only how far it gets
-  ahead of the renderer.
+  stale is ever heard. A track change is none of these: the sender flushes up
+  to the end of the track it leaves, which the plugin tells from a seek by the
+  flush's timestamp, and the next track follows in the same stream without a
+  gap. The buffer lets go of what the renderer has read, so a segment may run
+  for hours: *Stream buffer limit* bounds only how far it gets ahead of the
+  renderer.
 - **Format.** Each segment is encoded at the sender's own sample rate and bit
   depth, which shairport-sync announces before the first frame and at every
   switch: 16-bit 44.1 kHz for classic AirPlay and AirPlay 2 realtime streams,

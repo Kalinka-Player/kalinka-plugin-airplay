@@ -2,6 +2,16 @@
 
 Curated, user-facing notes per release. Add a `## <version>` section before tagging — the release workflow puts the matching section into the GitHub Release body.
 
+## 0.2.2
+
+- Fixed: a track change inside an AirPlay stream no longer cuts it. The sender
+  flushes up to the end of the track it leaves, which the plugin now tells from
+  a seek by the flush's timestamp against the track's reported end; the next
+  track follows in the same stream, with no buffering pause and nothing of the
+  old track's end lost.
+- The receiver status names the AirPlay 2 stream kind, buffered or realtime.
+- The server log notes the sender's play, pause, flush and resume messages.
+
 ## 0.2.1
 
 - Fixed: playback stuck in "buffering" with no sound after a quick pause, seek or

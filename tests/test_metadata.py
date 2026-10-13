@@ -66,7 +66,7 @@ def test_play_state_events():
     stream += ssnc("prsm") + ssnc("pend") + ssnc("abeg")
     assert decode_all(stream) == [
         PlayBegan(),
-        Interrupted(),
+        Interrupted(flush_rtp=1234),
         Interrupted(),
         Resumed(),
         Resumed(),
@@ -88,7 +88,9 @@ def test_a_new_track_does_not_inherit_the_last_ones_fields():
 def test_progress_counts_from_the_track_start_across_the_wrap():
     start = (1 << 32) - 44100
     stream = ssnc("prgr", f"{start}/{start + 88200 - (1 << 32)}/{441000 - 44100}".encode())
-    assert decode_all(stream) == [Progress(position_ms=2000, duration_ms=10000)]
+    assert decode_all(stream) == [
+        Progress(position_ms=2000, duration_ms=10000, end_rtp=441000 - 44100)
+    ]
 
 
 @pytest.mark.parametrize(

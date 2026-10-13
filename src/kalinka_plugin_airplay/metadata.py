@@ -101,7 +101,15 @@ class PlayEnded:
 
 @dataclass(frozen=True)
 class Interrupted:
-    """The sender paused or seeked: audio already sent must not be heard."""
+    """The sender paused or flushed.
+
+    A flush names the RTP timestamp it flushed up to; a pause names nothing.
+    A flush up to the end of the current track is a track change, after
+    which the next track follows in the same stream; any other flush, or a
+    pause, means audio already sent must not be heard.
+    """
+
+    flush_rtp: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -125,6 +133,8 @@ class Artwork:
 class Progress:
     position_ms: int
     duration_ms: int
+    # The track's end on the sender's RTP timeline, as a flush names it.
+    end_rtp: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -205,11 +215,26 @@ Event = (
 _SIMPLE = {
     "pbeg": PlayBegan,
     "pend": PlayEnded,
-    "pfls": Interrupted,
     "paus": Interrupted,
     "pres": Resumed,
     "prsm": Resumed,
 }
+# Logged as they arrive: a few per track, and they explain every cut.
+_TRANSPORT = {
+    "pbeg": "play session began",
+    "pend": "play session ended",
+    "pfls": "flushed up to",
+    "flsr": "flush requested at",
+    "paus": "paused",
+    "pres": "playing",
+    "prsm": "audio resumed",
+}
+
+
+def rtp_distance(a: int, b: int) -> int:
+    """a - b on the RTP timeline, which wraps at 2^32: negative when a is behind."""
+    distance = (a - b) % RTP_WRAP
+    return distance - RTP_WRAP if distance >= RTP_WRAP // 2 else distance
 _TRACK_FIELDS = {"minm": "title", "asar": "artist", "asal": "album"}
 
 
@@ -232,8 +257,14 @@ class EventDecoder:
             return None
         if item.kind != "ssnc":
             return None
+        if item.code in _TRANSPORT:
+            text = _text(item.data)
+            logger.info("AirPlay sender: %s%s", _TRANSPORT[item.code], f" {text}" if text else "")
         if item.code in _SIMPLE:
             return _SIMPLE[item.code]()
+        if item.code == "pfls":
+            text = _text(item.data)
+            return Interrupted(flush_rtp=int(text) % RTP_WRAP if text.isdigit() else None)
         if item.code == "mdst":
             self._track = {}
         elif item.code == "mden" and self._track:
@@ -269,6 +300,7 @@ class EventDecoder:
         return Progress(
             position_ms=round(((current - start) % RTP_WRAP) * to_ms),
             duration_ms=round(((end - start) % RTP_WRAP) * to_ms),
+            end_rtp=end % RTP_WRAP,
         )
 
     def _remote(self, code: str, text: str) -> RemoteChanged:

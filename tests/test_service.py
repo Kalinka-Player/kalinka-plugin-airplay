@@ -132,11 +132,64 @@ async def test_a_pause_or_seek_stops_the_stream_rather_than_pausing_the_renderer
     assert [call[0] for call in direct.hold.calls] == ["play", "stop", "play"]
 
 
+END = 9_000_000  # the current track's end on the sender's RTP timeline
+
+
+async def test_a_flush_at_the_end_of_the_track_is_a_track_change_the_stream_plays_through(
+    service, direct, segments
+):
+    await play(service)
+    await service.event(Progress(position_ms=170_000, duration_ms=180_000, end_rtp=END))
+    await service.event(Interrupted(flush_rtp=END - 20_000))
+    await play(service)
+    assert direct.hold.named("stop") == [] and len(segments[0]) == 1
+    assert len(direct.hold.named("play")) == 1
+
+
+async def test_a_flush_elsewhere_in_the_track_is_a_seek_that_cuts_the_stream(
+    service, direct, segments
+):
+    await play(service)
+    await service.event(Progress(position_ms=10_000, duration_ms=180_000, end_rtp=END))
+    await service.event(Interrupted(flush_rtp=END - 2_000_000))
+    assert direct.hold.named("stop") == [("stop",)] and segments[0][0].ended
+
+
+async def test_a_pause_cuts_the_stream_whatever_the_progress_says(service, direct, segments):
+    await play(service)
+    await service.event(Progress(position_ms=179_000, duration_ms=180_000, end_rtp=END))
+    await service.event(Interrupted())
+    assert direct.hold.named("stop") == [("stop",)]
+
+
+async def test_a_flush_before_any_progress_is_known_cuts_the_stream(service, direct):
+    await play(service)
+    await service.event(Interrupted(flush_rtp=END))
+    assert direct.hold.named("stop") == [("stop",)]
+
+
+async def test_the_track_end_is_matched_across_the_rtp_wrap(service, direct):
+    await play(service)
+    await service.event(Progress(position_ms=0, duration_ms=1000, end_rtp=100))
+    await service.event(Interrupted(flush_rtp=(1 << 32) - 50))
+    assert direct.hold.named("stop") == []
+
+
+async def test_a_new_session_forgets_the_last_tracks_end(service, direct):
+    await play(service)
+    await service.event(Progress(position_ms=0, duration_ms=1000, end_rtp=END))
+    await service.event(PlayEnded())
+    await service.event(PlayBegan())
+    await play(service)
+    await service.event(Interrupted(flush_rtp=END))
+    assert direct.hold.named("stop") == [("stop",)]
+
+
 async def test_the_session_ending_gives_the_output_back(service, direct, segments, remote):
     await service.event(SenderNamed("Jo's iPhone"))
     await service.event(StreamType("Buffered"))
     await play(service, stream=HIRES)
-    assert service.status == "Playing from Jo's iPhone (AirPlay 2, ALAC 24-bit 48 kHz)"
+    assert service.status == "Playing from Jo's iPhone (AirPlay 2 buffered, ALAC 24-bit 48 kHz)"
     await service.event(PlayEnded())
     assert direct.hold.named("release") and segments[0][0].ended
     assert service.status == "Waiting for an AirPlay sender"

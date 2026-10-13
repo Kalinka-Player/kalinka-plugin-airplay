@@ -29,6 +29,7 @@ from kalinka_plugin_sdk.direct_playback import (
 from kalinka_plugin_sdk.inputmodule import ModuleAsset, TrackSource
 
 from .metadata import (
+    PROGRESS_RATE,
     Artwork,
     Event,
     Interrupted,
@@ -43,6 +44,7 @@ from .metadata import (
     StreamType,
     TrackChanged,
     VolumeChanged,
+    rtp_distance,
 )
 from .remote import NEXT, PAUSE, PLAY, PREVIOUS, SenderRemote
 from .segment import Segment, SegmentFactory, SegmentFormat
@@ -55,7 +57,14 @@ TITLE = "AirPlay"
 AIRPLAY_MIN_VOLUME = -30.0
 # Someone else chose to play: the sender must wait until it is played again.
 _TAKEN_OVER = {RevokeReason.QUEUE_PLAY, RevokeReason.TAKEN_BACK, RevokeReason.OTHER_HOLDER}
-_STREAM_KINDS = {"Classic": "classic AirPlay", "Realtime": "AirPlay 2", "Buffered": "AirPlay 2"}
+_STREAM_KINDS = {
+    "Classic": "classic AirPlay",
+    "Realtime": "AirPlay 2 realtime",
+    "Buffered": "AirPlay 2 buffered",
+}
+# A flush this close to the track's end, on the sender's 44.1 kHz progress
+# clock, is the sender leaving the track rather than seeking within it.
+TRACK_END_SLACK = 44100
 
 
 class ArtworkStore:
@@ -136,6 +145,7 @@ class AirPlayService:
         self._format: Optional[SegmentFormat] = None
         self._stream: Optional[StreamFormat] = None
         self._stream_type: Optional[str] = None
+        self._track_end_rtp: Optional[int] = None
         self._dropped = 0
         # Set when Kalinka took the output back or paused, until the sender plays again.
         self._suspended = False
@@ -204,7 +214,11 @@ class AirPlayService:
                 await self._output_declared(event)
             case Interrupted():
                 self._suspended = False
-                await self._interrupt()
+                if self._flush_at_track_end(event):
+                    logger.info("AirPlay track change inside the stream; it plays on")
+                else:
+                    logger.info("AirPlay stream cut: %s", self._cut_reason(event))
+                    await self._interrupt()
             case PlayEnded():
                 await self._end_session()
             case TrackChanged():
@@ -213,6 +227,8 @@ class AirPlayService:
                 await self._show(0)
             case Progress():
                 self._duration_ms = event.duration_ms
+                if event.end_rtp is not None:
+                    self._track_end_rtp = event.end_rtp
                 await self._show(event.position_ms)
             case Artwork():
                 self._artwork_id = self.artwork.put(event.image)
@@ -291,6 +307,23 @@ class AirPlayService:
         else:
             await self._end_segment()
 
+    def _flush_at_track_end(self, event: Interrupted) -> bool:
+        """A flush up to the current track's end is the sender moving to the
+        next track: what it already sent is the end of this one, and the next
+        follows in the same stream. A flush anywhere else is a seek or a skip,
+        and a pause names no point at all; both cut the stream."""
+        if event.flush_rtp is None or self._track_end_rtp is None:
+            return False
+        return abs(rtp_distance(event.flush_rtp, self._track_end_rtp)) <= TRACK_END_SLACK
+
+    def _cut_reason(self, event: Interrupted) -> str:
+        if event.flush_rtp is None:
+            return "the sender paused"
+        if self._track_end_rtp is None:
+            return f"the sender flushed to {event.flush_rtp} before reporting the track's end"
+        seconds = rtp_distance(event.flush_rtp, self._track_end_rtp) / PROGRESS_RATE
+        return f"the sender flushed to {event.flush_rtp}, {seconds:+.1f} s from the track's end"
+
     async def _interrupt(self) -> None:
         """What reached Kalinka ahead of the sender's pause or seek must not be heard.
 
@@ -320,7 +353,7 @@ class AirPlayService:
         self._suspended = False
         self._remote.forget()
         self._sender = self._meta = self._artwork_id = None
-        self._format = self._stream = self._stream_type = None
+        self._format = self._stream = self._stream_type = self._track_end_rtp = None
         self._duration_ms = self._dropped = 0
 
     async def _lose_output(self, reason: str) -> None:
