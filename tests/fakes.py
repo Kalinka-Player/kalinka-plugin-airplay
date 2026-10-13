@@ -50,6 +50,9 @@ class Hold:
     async def pause(self):
         self._record("pause")
 
+    async def stop(self):
+        self._record("stop")
+
     async def set_volume(self, percent):
         self._record("volume", percent)
         if self.no_volume:

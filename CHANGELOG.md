@@ -2,6 +2,17 @@
 
 Curated, user-facing notes per release. Add a `## <version>` section before tagging — the release workflow puts the matching section into the GitHub Release body.
 
+## 0.2.1
+
+- Fixed: playback stuck in "buffering" with no sound after a quick pause, seek or
+  track skip on the sender. A sender pause or seek now stops the renderer's
+  stream instead of pausing it, which drops what the renderer holds at once;
+  the next audio starts a new stream. A pause that reached the renderer while
+  it was still preparing a stream parked it until the next transport command,
+  which a new stream is not.
+- Changed: while the sender is paused, Kalinka shows the AirPlay stream as
+  stopped rather than paused.
+
 ## 0.2.0
 
 ### Changed

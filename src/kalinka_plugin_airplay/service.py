@@ -292,9 +292,15 @@ class AirPlayService:
             await self._end_segment()
 
     async def _interrupt(self) -> None:
-        """What reached Kalinka ahead of the sender's pause or seek must not be heard."""
+        """What reached Kalinka ahead of the sender's pause or seek must not be heard.
+
+        The stream is stopped, not paused: a stop drops what the renderer
+        holds of it at once, and the next audio starts a new stream. A pause
+        that reaches the renderer while it still prepares a stream parks it
+        until the next transport command, which a new stream is not.
+        """
         if self._segment_playing:
-            await self._on_hold(lambda hold: hold.pause())
+            await self._on_hold(lambda hold: hold.stop())
         await self._end_segment()
 
     async def _end_segment(self) -> None:

@@ -109,12 +109,27 @@ async def test_a_sender_pause_or_seek_drops_what_kalinka_already_has(
     await play(service)
     first = segments[0][0]
     await service.event(Interrupted())
-    assert direct.hold.named("pause") and first.ended
+    assert direct.hold.named("stop") and first.ended
     assert service.segment is None
     await play(service)
     [_, (_, source, _)] = direct.hold.named("play")
     assert source.source.asset_id == segments[0][1].id != first.id
     assert len(direct.holds) == 1
+
+
+async def test_a_pause_or_seek_stops_the_stream_rather_than_pausing_the_renderer(
+    service, direct
+):
+    """A pause reaching the renderer while it still prepares a stream parks it
+    until a transport command; a stop drops the stream and waits for the next."""
+    await service.event(Interrupted())
+    await play(service)
+    assert direct.hold.named("stop") == []
+    await service.event(Interrupted())
+    await service.event(Interrupted())
+    assert direct.hold.named("stop") == [("stop",)]
+    await play(service)
+    assert [call[0] for call in direct.hold.calls] == ["play", "stop", "play"]
 
 
 async def test_the_session_ending_gives_the_output_back(service, direct, segments, remote):
@@ -144,7 +159,7 @@ async def test_a_format_switch_ends_the_segment_and_the_next_is_in_the_new_forma
     await play(service)
     await service.event(HIRES)
     first = segments[0][0]
-    assert first.ended and direct.hold.named("pause") and service.segment is None
+    assert first.ended and direct.hold.named("stop") and service.segment is None
     await play(service, stream=HIRES)
     [_, (_, source, _)] = direct.hold.named("play")
     second = segments[0][1]
@@ -157,7 +172,7 @@ async def test_the_same_format_announced_again_changes_nothing(service, direct, 
     await play(service)
     await service.event(CD)
     await service.event(StreamFormat("AAC", 44100, 16, 2))
-    assert direct.hold.named("pause") == [] and len(segments[0]) == 1
+    assert direct.hold.named("stop") == [] and len(segments[0]) == 1
 
 
 async def test_a_new_session_waits_for_its_own_format(service, direct, segments):
@@ -246,7 +261,7 @@ async def test_pause_from_kalinka_pauses_the_sender_and_drops_its_audio(
     service.on_command(TransportRequest(TransportKind.PAUSE))
     await settle(service)
     assert remote.sent == [PAUSE]
-    assert direct.hold.named("pause") and segments[0][0].ended
+    assert direct.hold.named("stop") and segments[0][0].ended
     await play(service)
     assert len(segments[0]) == 1
 
