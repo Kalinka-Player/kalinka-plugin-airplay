@@ -9,9 +9,10 @@ from kalinka_plugin_sdk.direct_playback import HoldEnded, OutputUnavailable
 class Segment:
     count = 0
 
-    def __init__(self):
+    def __init__(self, format):
         Segment.count += 1
         self.id = f"segment-{Segment.count}"
+        self.format = format
         self.fed_ms = 0.0
         self.failure = None
         self.started = self.ended = False
@@ -20,7 +21,7 @@ class Segment:
         self.started = True
 
     async def feed(self, pcm):
-        self.fed_ms += len(pcm) / 6 / 44.1
+        self.fed_ms += len(pcm) / 6 / (self.format.rate / 1000)
 
     async def end(self):
         self.ended = True

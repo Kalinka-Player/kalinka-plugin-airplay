@@ -58,14 +58,13 @@ def settings(**changes) -> ReceiverSettings:
         name="Kalinka (pi)",
         port=7000,
         airplay2=True,
-        output_rate=44100,
         latency_offset_s=-0.8,
         metadata_pipe=Path("/var/lib/kalinka/airplay/metadata"),
     )
     return ReceiverSettings(**(values | changes))
 
 
-def test_config_pins_the_output_and_routes_metadata():
+def test_config_keeps_the_senders_rate_in_one_layout_and_routes_metadata():
     text = render_config(settings())
     for line in (
         'name = "Kalinka (pi)";',
@@ -74,7 +73,8 @@ def test_config_pins_the_output_and_routes_metadata():
         'output_backend = "stdout";',
         'ignore_volume_control = "yes";',
         "audio_backend_latency_offset_in_seconds = -0.800;",
-        "output_rate = 44100;",
+        'interpolation = "basic";',
+        "output_rate = (44100, 48000);",
         'output_format = "S24_3LE";',
         "output_channels = 2;",
         'include_cover_art = "yes";',

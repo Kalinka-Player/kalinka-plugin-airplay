@@ -6,7 +6,7 @@ from fakes import Direct
 from kalinka_plugin_sdk.live_capture import LiveCapture
 from pydantic import ValidationError
 
-from kalinka_plugin_airplay import AirPlayConfig, KalinkaPluginAirPlay, OutputRate
+from kalinka_plugin_airplay import AirPlayConfig, KalinkaPluginAirPlay
 from kalinka_plugin_airplay.metadata import Artwork
 
 
@@ -15,7 +15,10 @@ def test_defaults():
     assert not config.enabled and config.airplay2
     assert config.device_name.startswith("Kalinka (")
     assert config.executable == "/usr/libexec/kalinka-plugin-airplay/shairport-sync"
-    assert OutputRate(config.output_rate).hertz == 44100
+
+
+def test_a_saved_sample_rate_setting_from_0_1_is_ignored():
+    assert AirPlayConfig(output_rate="48 kHz").enabled is False
 
 
 @pytest.mark.parametrize("name", ["", "x" * 51, "two\nlines"])

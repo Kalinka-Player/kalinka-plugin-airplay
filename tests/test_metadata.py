@@ -7,12 +7,15 @@ from kalinka_plugin_airplay.metadata import (
     Interrupted,
     Item,
     ItemParser,
+    OutputFormat,
     PlayBegan,
     PlayEnded,
     Progress,
     RemoteChanged,
     Resumed,
     SenderNamed,
+    StreamFormat,
+    StreamType,
     TrackChanged,
     VolumeChanged,
 )
@@ -113,6 +116,29 @@ def test_a_withdrawn_port_is_no_port():
 def test_cover_art_and_sender_name():
     events = decode_all(ssnc("PICT", PICTURE) + ssnc("PICT") + ssnc("snam", b"Jo's iPhone"))
     assert events == [Artwork(PICTURE), SenderNamed("Jo's iPhone")]
+
+
+@pytest.mark.parametrize(
+    "name, expected",
+    [
+        (b"ALAC/44100/S16_LE/2", StreamFormat("ALAC", 44100, 16, 2)),
+        (b"ALAC/48000/S24_LE/2", StreamFormat("ALAC", 48000, 24, 2)),
+        (b"AAC/44100/F24/2", StreamFormat("AAC", 44100, 24, 2)),
+        (b"AAC/48000/F24/5.1", StreamFormat("AAC", 48000, 24, 6)),
+        (b"AAC/48000/F24/7.1", StreamFormat("AAC", 48000, 24, 8)),
+    ],
+)
+def test_the_stream_format_as_the_receiver_names_it(name, expected):
+    assert decode_all(ssnc("sdsc", name)) == [expected]
+
+
+def test_a_stream_description_that_is_no_format_is_ignored():
+    assert decode_all(ssnc("sdsc", b"None (0)") + ssnc("odsc", b"what/ever")) == []
+
+
+def test_the_stream_type_and_output_format():
+    events = decode_all(ssnc("styp", b"Buffered") + ssnc("odsc", b"48000/S24_3LE/2"))
+    assert events == [StreamType("Buffered"), OutputFormat(48000, "S24_3LE", 2)]
 
 
 def test_other_items_are_ignored():

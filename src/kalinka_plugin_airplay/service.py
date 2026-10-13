@@ -32,17 +32,21 @@ from .metadata import (
     Artwork,
     Event,
     Interrupted,
+    OutputFormat,
     PlayBegan,
     PlayEnded,
     Progress,
     RemoteChanged,
     Resumed,
     SenderNamed,
+    StreamFormat,
+    StreamType,
     TrackChanged,
     VolumeChanged,
 )
 from .remote import NEXT, PAUSE, PLAY, PREVIOUS, SenderRemote
-from .segment import Segment, SegmentFactory
+from .segment import Segment, SegmentFactory, SegmentFormat
+from .shairport import CHANNELS, OUTPUT_FORMAT
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +55,7 @@ TITLE = "AirPlay"
 AIRPLAY_MIN_VOLUME = -30.0
 # Someone else chose to play: the sender must wait until it is played again.
 _TAKEN_OVER = {RevokeReason.QUEUE_PLAY, RevokeReason.TAKEN_BACK, RevokeReason.OTHER_HOLDER}
+_STREAM_KINDS = {"Classic": "classic AirPlay", "Realtime": "AirPlay 2", "Buffered": "AirPlay 2"}
 
 
 class ArtworkStore:
@@ -101,6 +106,11 @@ class AirPlayService:
     to idling or to a renderer change is taken again as soon as the
     sender's audio flows.
 
+    Each segment is encoded at the sender's own rate and depth, which the
+    receiver announces before the first frame and at every switch. Audio
+    that arrives before an announcement is dropped rather than misread, and
+    a switch ends the segment so that no byte is read as another format.
+
     @note All methods run on the event loop; listener callbacks return at
         once and do their work in tasks.
     """
@@ -123,6 +133,10 @@ class AirPlayService:
         self._hold: Optional[DirectPlaybackSession] = None
         self._segment: Optional[Segment] = None
         self._segment_playing = False
+        self._format: Optional[SegmentFormat] = None
+        self._stream: Optional[StreamFormat] = None
+        self._stream_type: Optional[str] = None
+        self._dropped = 0
         # Set when Kalinka took the output back or paused, until the sender plays again.
         self._suspended = False
         self._volume: Optional[int] = None
@@ -140,13 +154,26 @@ class AirPlayService:
     @property
     def status(self) -> str:
         if self._hold is not None and self._hold.active:
-            return f"Playing from {self._sender or 'an AirPlay sender'}"
+            playing = f"Playing from {self._sender or 'an AirPlay sender'}"
+            return f"{playing} ({self.stream_description})" if self._stream else playing
         return "Waiting for an AirPlay sender"
+
+    @property
+    def stream_description(self) -> str:
+        """What plays, as in "AirPlay 2, ALAC 24-bit 48 kHz"; empty before anything does."""
+        if self._stream is None:
+            return ""
+        kind = _STREAM_KINDS.get(self._stream_type, "AirPlay")
+        return f"{kind}, {self._stream.codec} {SegmentFormat(self._stream.rate, self._stream.bits).describe}"
 
     async def audio(self, pcm: bytes) -> None:
         """PCM from the receiver, in real time while the sender plays."""
         async with self._lock:
             if self._suspended:
+                return
+            if self._format is None:
+                # Until the receiver has said what it writes, the bytes cannot be read.
+                self._dropped += len(pcm)
                 return
             if self._segment is None and not await self._begin_segment():
                 return
@@ -162,8 +189,19 @@ class AirPlayService:
 
     async def _event(self, event: Event) -> None:
         match event:
-            case PlayBegan() | Resumed():
+            case PlayBegan():
                 self._suspended = False
+                # The session's format comes with its first frame.
+                self._format = self._stream = None
+            case Resumed():
+                self._suspended = False
+            case StreamType():
+                self._stream_type = event.kind
+            case StreamFormat():
+                self._stream = event
+                await self._use_format(SegmentFormat(event.rate, event.bits))
+            case OutputFormat():
+                await self._output_declared(event)
             case Interrupted():
                 self._suspended = False
                 await self._interrupt()
@@ -199,6 +237,32 @@ class AirPlayService:
         await self.receiver_lost()
         await self._remote.aclose()
 
+    async def _use_format(self, format: SegmentFormat) -> None:
+        """Encode from here on at this rate and depth; a running segment ends first."""
+        if format == self._format:
+            return
+        if self._dropped:
+            logger.debug("AirPlay: %d bytes arrived before their format", self._dropped)
+            self._dropped = 0
+        if self._segment is not None:
+            logger.info("AirPlay stream is now %s", format.describe)
+            await self._interrupt()
+        self._format = format
+
+    async def _output_declared(self, output: OutputFormat) -> None:
+        """The receiver names its PCM at the first frame; its rate is what the bytes are."""
+        if output.sample_format != OUTPUT_FORMAT or output.channels != CHANNELS:
+            self.output_error = (
+                f"The AirPlay receiver writes {output.sample_format} audio in "
+                f"{output.channels} channels, which Kalinka cannot read"
+            )
+            logger.error("%s", self.output_error)
+            await self._end_segment()
+            self._format = None
+            return
+        bits = self._format.bits if self._format else 24
+        await self._use_format(SegmentFormat(output.rate, bits))
+
     async def _begin_segment(self) -> bool:
         if self._hold is None or not self._hold.active:
             try:
@@ -210,7 +274,7 @@ class AirPlayService:
                 logger.warning("AirPlay cannot play: %s", error)
                 return False
             await self._apply_volume()
-        segment = self._new_segment()
+        segment = self._new_segment(self._format)
         await segment.start()
         self._segment, self._segment_playing = segment, False
         return True
@@ -250,7 +314,8 @@ class AirPlayService:
         self._suspended = False
         self._remote.forget()
         self._sender = self._meta = self._artwork_id = None
-        self._duration_ms = 0
+        self._format = self._stream = self._stream_type = None
+        self._duration_ms = self._dropped = 0
 
     async def _lose_output(self, reason: str) -> None:
         logger.warning("AirPlay playback stopped: %s", reason)

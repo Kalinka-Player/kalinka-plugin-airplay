@@ -34,6 +34,8 @@ with open(os.path.join(os.path.dirname(sys.argv[2]), "starts"), "a") as starts:
 pipe = re.search(r'pipe_name = "([^"]+)"', config).group(1)
 fd = os.open(pipe, os.O_WRONLY)
 os.write(fd, ssnc("pbeg") + ssnc("snam", b"Test iPhone") + track("Song", "Singer", "Record"))
+os.write(fd, ssnc("styp", b"Classic") + ssnc("sdsc", b"ALAC/44100/S16_LE/2"))
+os.write(fd, ssnc("odsc", b"44100/S24_3LE/2"))
 for _ in range(10):
     sys.stdout.buffer.write(bytes(6 * 4410))
     sys.stdout.buffer.flush()
@@ -64,7 +66,7 @@ def direct():
 def receiver(tmp_path, direct, *, name="Kalinka (test)", nqptp=NQPTP_BUSY):
     service = AirPlayService(
         direct,
-        segment_factory(FLAC, 44100, tmp_path, 1 << 24),
+        segment_factory(FLAC, tmp_path, 1 << 24),
         Remote(available=False),
         prebuffer_ms=300,
     )
@@ -75,7 +77,6 @@ def receiver(tmp_path, direct, *, name="Kalinka (test)", nqptp=NQPTP_BUSY):
         name=name,
         port=7000,
         airplay2=True,
-        output_rate=44100,
         latency_offset_s=-0.8,
     )
     state = tmp_path / "state"
@@ -96,8 +97,9 @@ async def test_a_sender_plays_through_kalinka(tmp_path, direct):
         [(_, source, track)] = direct.hold.named("play")
         assert source.source.asset_id == service.segment.id
         assert (track.title, track.performer.name) == ("Song", "Singer")
-        assert service.status == "Playing from Test iPhone"
-        assert rx.status == "Playing from Test iPhone"
+        assert service.segment.format.bits == 16
+        assert service.status == "Playing from Test iPhone (classic AirPlay, ALAC 16-bit 44.1 kHz)"
+        assert rx.status == service.status
         assert "AirPlay 2 is off" in rx.notice
         config = state / "shairport-sync.conf"
         assert 'service_type = "classic";' in config.read_text()

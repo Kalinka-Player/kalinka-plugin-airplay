@@ -12,19 +12,25 @@ from kalinka_plugin_sdk.direct_playback import (
 from kalinka_plugin_airplay.metadata import (
     Artwork,
     Interrupted,
+    OutputFormat,
     PlayBegan,
     PlayEnded,
     Progress,
     RemoteChanged,
     Resumed,
     SenderNamed,
+    StreamFormat,
+    StreamType,
     TrackChanged,
     VolumeChanged,
 )
 from kalinka_plugin_airplay.remote import NEXT, PAUSE, PLAY, PREVIOUS
+from kalinka_plugin_airplay.segment import SegmentFormat
 from kalinka_plugin_airplay.service import AirPlayService, airplay_volume_to_percent
 
 CHUNK = b"\0" * 6 * 4410  # 100 ms of S24_3LE stereo at 44.1 kHz
+CD = StreamFormat("ALAC", 44100, 16, 2)
+HIRES = StreamFormat("ALAC", 48000, 24, 2)
 
 
 @pytest.fixture
@@ -36,8 +42,8 @@ def direct():
 def segments():
     made = []
 
-    def new():
-        made.append(Segment())
+    def new(format):
+        made.append(Segment(format))
         return made[-1]
 
     return made, new
@@ -53,7 +59,9 @@ def service(direct, segments, remote):
     return AirPlayService(direct, segments[1], remote, prebuffer_ms=300)
 
 
-async def play(service, seconds=0.5):
+async def play(service, seconds=0.5, stream=CD):
+    """Audio as the receiver sends it: its format announced, then PCM."""
+    await service.event(stream)
     for _ in range(round(seconds * 10)):
         await service.audio(CHUNK)
 
@@ -67,6 +75,7 @@ async def test_audio_takes_the_output_and_plays_once_the_buffer_is_full(
     service, direct, segments
 ):
     await service.event(PlayBegan())
+    await service.event(CD)
     await service.audio(CHUNK)
     hold = direct.hold
     assert hold.named("play") == []
@@ -110,12 +119,72 @@ async def test_a_sender_pause_or_seek_drops_what_kalinka_already_has(
 
 async def test_the_session_ending_gives_the_output_back(service, direct, segments, remote):
     await service.event(SenderNamed("Jo's iPhone"))
-    await play(service)
-    assert service.status == "Playing from Jo's iPhone"
+    await service.event(StreamType("Buffered"))
+    await play(service, stream=HIRES)
+    assert service.status == "Playing from Jo's iPhone (AirPlay 2, ALAC 24-bit 48 kHz)"
     await service.event(PlayEnded())
     assert direct.hold.named("release") and segments[0][0].ended
     assert service.status == "Waiting for an AirPlay sender"
+    assert service.stream_description == ""
     assert remote.updates[-1] is None
+
+
+async def test_audio_before_its_format_is_known_is_dropped(service, direct, segments):
+    await service.event(PlayBegan())
+    await service.audio(CHUNK)
+    assert direct.holds == [] and segments[0] == []
+    await play(service)
+    assert segments[0][0].format == SegmentFormat(44100, 16)
+    assert len(direct.hold.named("play")) == 1
+
+
+async def test_a_format_switch_ends_the_segment_and_the_next_is_in_the_new_format(
+    service, direct, segments
+):
+    await play(service)
+    await service.event(HIRES)
+    first = segments[0][0]
+    assert first.ended and direct.hold.named("pause") and service.segment is None
+    await play(service, stream=HIRES)
+    [_, (_, source, _)] = direct.hold.named("play")
+    second = segments[0][1]
+    assert source.source.asset_id == second.id
+    assert second.format == SegmentFormat(48000, 24)
+    assert service.status.endswith("(AirPlay, ALAC 24-bit 48 kHz)")
+
+
+async def test_the_same_format_announced_again_changes_nothing(service, direct, segments):
+    await play(service)
+    await service.event(CD)
+    await service.event(StreamFormat("AAC", 44100, 16, 2))
+    assert direct.hold.named("pause") == [] and len(segments[0]) == 1
+
+
+async def test_a_new_session_waits_for_its_own_format(service, direct, segments):
+    await play(service)
+    await service.event(PlayEnded())
+    await service.event(PlayBegan())
+    await service.audio(CHUNK)
+    assert len(direct.holds) == 1 and len(segments[0]) == 1
+    await play(service, stream=HIRES)
+    assert len(direct.holds) == 2 and segments[0][1].format == SegmentFormat(48000, 24)
+
+
+async def test_the_receivers_output_rate_is_what_its_bytes_are(service, segments):
+    await service.event(CD)
+    await service.event(OutputFormat(48000, "S24_3LE", 2))
+    await service.audio(CHUNK)
+    assert segments[0][0].format == SegmentFormat(48000, 16)
+
+
+async def test_an_output_kalinka_cannot_read_is_dropped_with_a_reason(
+    service, direct, segments
+):
+    await play(service)
+    await service.event(OutputFormat(44100, "S32_LE", 2))
+    assert "S32_LE" in service.output_error and segments[0][0].ended
+    await service.audio(CHUNK)
+    assert len(segments[0]) == 1
 
 
 async def test_the_sender_track_is_shown_without_restarting_the_stream(service, direct):
@@ -243,6 +312,7 @@ async def test_a_renderer_error_stops_the_stream_and_pauses_the_sender(
 
 
 async def test_an_encoder_failure_stops_the_stream(service, segments, remote):
+    await service.event(CD)
     await service.audio(CHUNK)
     segments[0][0].failure = "flac stopped"
     await service.audio(CHUNK)

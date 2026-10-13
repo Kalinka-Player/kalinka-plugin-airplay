@@ -152,6 +152,40 @@ class SenderNamed:
     name: str
 
 
+@dataclass(frozen=True)
+class StreamType:
+    """How the sender streams: "Classic", "Realtime" or "Buffered"."""
+
+    kind: str
+
+
+@dataclass(frozen=True)
+class StreamFormat:
+    """
+    @brief What the receiver decodes, as it names it: ALAC/48000/S24_LE/2.
+
+    Sent at the first frame of a session and whenever the encoding switches.
+
+    @param bits The decoded sample depth: 16 for S16, 24 for S24 and for AAC,
+        which decodes to floats the receiver writes at 24 bits.
+    """
+
+    codec: str
+    rate: int
+    bits: int
+    channels: int
+
+
+@dataclass(frozen=True)
+class OutputFormat:
+    """The PCM the receiver writes, as it names it: 44100/S24_3LE/2. Sent at
+    the first frame of a session only."""
+
+    rate: int
+    sample_format: str
+    channels: int
+
+
 Event = (
     PlayBegan
     | PlayEnded
@@ -163,6 +197,9 @@ Event = (
     | VolumeChanged
     | RemoteChanged
     | SenderNamed
+    | StreamType
+    | StreamFormat
+    | OutputFormat
 )
 
 _SIMPLE = {
@@ -213,6 +250,12 @@ class EventDecoder:
             return _volume(_text(item.data))
         elif item.code == "snam":
             return SenderNamed(_text(item.data))
+        elif item.code == "styp":
+            return StreamType(_text(item.data))
+        elif item.code == "sdsc":
+            return _stream_format(_text(item.data))
+        elif item.code == "odsc":
+            return _output_format(_text(item.data))
         elif item.code in ("clip", "dapo", "acre"):
             return self._remote(item.code, _text(item.data))
         return None
@@ -240,6 +283,34 @@ class EventDecoder:
 
 def _text(data: bytes) -> str:
     return data.decode("utf-8", errors="replace").strip("\0").strip()
+
+
+def _stream_format(text: str) -> Optional[StreamFormat]:
+    """ALAC/44100/S16_LE/2 or AAC/48000/F24/5.1; "None (0)" between streams."""
+    parts = text.split("/")
+    if len(parts) != 4 or not parts[1].isdigit():
+        return None
+    codec, rate, sample, channels = parts
+    depth = re.search(r"\d+", sample)
+    if depth is None or _channels(channels) == 0:
+        return None
+    return StreamFormat(codec, int(rate), min(int(depth.group()), 24), _channels(channels))
+
+
+def _output_format(text: str) -> Optional[OutputFormat]:
+    """44100/S24_3LE/2."""
+    parts = text.split("/")
+    if len(parts) != 3 or not parts[0].isdigit() or _channels(parts[2]) == 0:
+        return None
+    return OutputFormat(int(parts[0]), parts[1], _channels(parts[2]))
+
+
+def _channels(text: str) -> int:
+    """2, or 5.1 and 7.1 as their channel counts; 0 when it is no count."""
+    parts = text.split(".")
+    if not parts or not all(part.isdigit() for part in parts):
+        return 0
+    return sum(int(part) for part in parts)
 
 
 def _volume(text: str) -> Optional[VolumeChanged]:

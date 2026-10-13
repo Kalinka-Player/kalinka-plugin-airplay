@@ -2,7 +2,6 @@
 
 import io
 import socket
-from enum import Enum
 from pathlib import Path
 from typing import ClassVar
 
@@ -21,15 +20,6 @@ from .segment import segment_factory
 from .service import MODULE, TITLE, AirPlayService
 
 LIBEXEC = "/usr/libexec/kalinka-plugin-airplay"
-
-
-class OutputRate(str, Enum):
-    CD = "44.1 kHz"
-    VIDEO = "48 kHz"
-
-    @property
-    def hertz(self) -> int:
-        return 44100 if self is OutputRate.CD else 48000
 
 
 class AirPlayConfig(ModuleConfig):
@@ -69,11 +59,6 @@ class AirPlayConfig(ModuleConfig):
                 "classic AirPlay, which also takes play, pause and skip from Kalinka."
             ),
         },
-    )
-    output_rate: OutputRate = Field(
-        default=OutputRate.CD,
-        title="Sample rate",
-        description="Senders mostly play 44.1 kHz music; 48 kHz suits video and AirPlay 2 lossless.",
     )
     port: int = Field(default=7000, ge=1024, le=65535, title="Service port")
     prebuffer_ms: int = Field(
@@ -155,14 +140,11 @@ class KalinkaPluginAirPlay(InputModulePlugin):
             return
         if context.direct_playback is None:
             raise RuntimeError("AirPlay requires Kalinka direct playback")
-        rate = OutputRate(config.output_rate).hertz
         cache = Path(paths.cache_dir()) / MODULE
         cache.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.service = AirPlayService(
             context.direct_playback,
-            segment_factory(
-                config.flac_executable, rate, cache, config.cache_limit_mib * 1024 * 1024
-            ),
+            segment_factory(config.flac_executable, cache, config.cache_limit_mib * 1024 * 1024),
             SenderRemote(),
             prebuffer_ms=config.prebuffer_ms,
         )
@@ -174,7 +156,6 @@ class KalinkaPluginAirPlay(InputModulePlugin):
                 name=config.device_name,
                 port=config.port,
                 airplay2=config.airplay2,
-                output_rate=rate,
                 # Audio leaves early by as much as Kalinka delays it, for lip sync.
                 latency_offset_s=-(config.prebuffer_ms + config.renderer_delay_ms) / 1000,
             ),

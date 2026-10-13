@@ -6,7 +6,7 @@ renderer selected in Kalinka. The renderer can be on another machine and is
 the only process that opens audio hardware.
 
 ```text
-iPhone ── AirPlay 2 / classic ── shairport-sync -o stdout ── PCM, 24-bit ──▶ plugin ──▶ flac
+iPhone ── AirPlay 2 / classic ── shairport-sync -o stdout ── PCM ────────▶ plugin ──▶ flac
                                   nqptp (AirPlay 2 timing)    metadata FIFO ──▶ plugin
                                                                                   │ live FLAC
                                                                                   ▼
@@ -26,6 +26,14 @@ beyond Kalinka's existing live-stream support.
   stale is ever heard. The buffer lets go of what the renderer has read, so a
   segment may run for hours: *Stream buffer limit* bounds only how far it gets
   ahead of the renderer.
+- **Format.** Each segment is encoded at the sender's own sample rate and bit
+  depth, which shairport-sync announces before the first frame and at every
+  switch: 16-bit 44.1 kHz for classic AirPlay and AirPlay 2 realtime streams,
+  24-bit 48 kHz for Apple Music Lossless over AirPlay 2. Nothing is resampled
+  or padded, so Kalinka shows the format as it is. AAC streams, which Apple
+  Music sends below its lossless setting, decode to 24 bits. The codec Kalinka
+  names is FLAC, the lossless carrier between server and renderer, whatever
+  the sender used.
 - **Lip sync.** shairport-sync emits audio early by the plugin's buffer plus
   the renderer's delay (`audio_backend_latency_offset_in_seconds`), so video on
   the sender stays in sync. Tune *Renderer delay* if it does not.

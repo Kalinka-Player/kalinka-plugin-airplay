@@ -2,6 +2,13 @@
 
 Curated, user-facing notes per release. Add a `## <version>` section before tagging — the release workflow puts the matching section into the GitHub Release body.
 
+## 0.2.0
+
+### Changed
+- **Kalinka shows the sender's real format.** Each stream is now encoded at the sender's own sample rate and bit depth: 16-bit 44.1 kHz for classic AirPlay and AirPlay 2 realtime streams, 24-bit 48 kHz for Apple Music Lossless over AirPlay 2. 0.1.x forced everything to 24-bit 44.1 kHz, which padded 16-bit streams and resampled 48 kHz ones. The *Sample rate* setting is gone; a saved value is ignored.
+- The receiver keeps the audio in sync by dropping or repeating a single frame when it must, instead of resampling a whole packet, so what reaches the renderer is the sender's samples.
+- The receiver status names what plays, as in "AirPlay 2, ALAC 24-bit 48 kHz".
+
 ## 0.1.1
 
 ### Fixed

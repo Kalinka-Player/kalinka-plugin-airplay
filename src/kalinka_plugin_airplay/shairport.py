@@ -8,8 +8,16 @@ from .child import ChildError
 
 REQUIRED_FEATURES = ("stdout", "metadata")
 CHANNELS = 2
-SAMPLE_BYTES = 3  # S24_3LE: packed 24-bit little-endian
+# The receiver writes one byte layout whatever plays, so a stream that
+# switches rate or depth never leaves bytes of one layout read as another:
+# S24_3LE, packed 24-bit little-endian. A 16-bit stream is shifted up into
+# it with a zero low byte, which the segment strips again; a 24-bit one is
+# as decoded; AAC, decoded to floats, is dithered down to 24 bits.
+OUTPUT_FORMAT = "S24_3LE"
+SAMPLE_BYTES = 3
 FRAME_BYTES = CHANNELS * SAMPLE_BYTES
+# The rates AirPlay carries. The receiver matches whichever the sender uses.
+OUTPUT_RATES = (44100, 48000)
 
 
 @dataclass(frozen=True)
@@ -75,7 +83,6 @@ class ReceiverSettings:
     name: str
     port: int
     airplay2: bool
-    output_rate: int
     latency_offset_s: float
     metadata_pipe: Path
 
@@ -83,6 +90,7 @@ class ReceiverSettings:
 def render_config(settings: ReceiverSettings) -> str:
     """The libconfig text shairport-sync is started with."""
     service_type = "airplay2" if settings.airplay2 else "classic"
+    rates = ", ".join(str(rate) for rate in OUTPUT_RATES)
     return f"""general =
 {{
   name = {_quote(settings.name)};
@@ -91,12 +99,13 @@ def render_config(settings: ReceiverSettings) -> str:
   output_backend = "stdout";
   ignore_volume_control = "yes";
   audio_backend_latency_offset_in_seconds = {settings.latency_offset_s:.3f};
+  interpolation = "basic";
 }};
 
 stdout =
 {{
-  output_rate = {settings.output_rate};
-  output_format = "S24_3LE";
+  output_rate = ({rates});
+  output_format = "{OUTPUT_FORMAT}";
   output_channels = {CHANNELS};
 }};
 

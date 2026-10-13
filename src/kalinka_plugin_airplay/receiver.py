@@ -30,7 +30,6 @@ class ReceiverOptions:
     name: str
     port: int
     airplay2: bool
-    output_rate: int
     latency_offset_s: float
 
 
@@ -198,7 +197,6 @@ class Receiver:
                 name=options.name,
                 port=options.port,
                 airplay2=airplay2,
-                output_rate=options.output_rate,
                 latency_offset_s=options.latency_offset_s,
                 metadata_pipe=pipe_path,
             )
