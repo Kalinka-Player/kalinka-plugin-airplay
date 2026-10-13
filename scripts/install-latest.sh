@@ -4,11 +4,12 @@
 # latest GitHub release.
 #
 # The plugin bundles native shairport-sync and nqptp builds linked against
-# the distribution's libraries, so each release carries one .deb per
-# distribution release and architecture: amd64 for PCs and arm64 for a 64-bit
-# Raspberry Pi OS. This picks the one for this machine, checks it against the
-# release's SHA256SUMS and installs it with apt; the server restarts by itself
-# to load it. Run it again at any time to upgrade.
+# Debian 13's libraries, so each release carries one .deb per architecture
+# for Debian 13 and the Raspberry Pi OS and DietPi releases based on it:
+# amd64 for PCs and arm64 for a 64-bit Raspberry Pi OS. This picks the one
+# for this machine, checks it against the release's SHA256SUMS and installs
+# it with apt; the server restarts by itself to load it. Run it again at any
+# time to upgrade.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/Kalinka-Player/kalinka-plugin-airplay/main/scripts/install-latest.sh | sudo bash
@@ -63,7 +64,7 @@ main() {
   esac
 
   codename="$(. /etc/os-release && printf '%s' "${VERSION_CODENAME:-}")"
-  [ -n "$codename" ] || die "/etc/os-release names no release codename"
+  [ "$codename" = trixie ] || die "the packages are for Debian 13 (trixie), including Raspberry Pi OS and DietPi based on it; this system is $(. /etc/os-release && printf '%s' "${PRETTY_NAME:-unknown}")"
 
   echo ">> Looking up the latest release of $repo ..."
   release="$(api "https://api.github.com/repos/$repo/releases/latest")" \
@@ -74,17 +75,17 @@ main() {
 import json, sys
 release = json.load(sys.stdin)
 assets = {a["name"]: a["browser_download_url"] for a in release.get("assets", [])}
-suffix = "+" + sys.argv[3] + "_" + sys.argv[2] + ".deb"
+suffix = "_" + sys.argv[2] + ".deb"
 debs = [n for n in assets if n.startswith(sys.argv[1] + "_") and n.endswith(suffix)]
 print(release.get("tag_name", ""))
 print(assets[debs[0]] if len(debs) == 1 else "")
 print(assets.get("SHA256SUMS", ""))
-' "$PACKAGE" "$arch" "$codename" <<<"$release")" || die "could not read the latest release of $repo"
+' "$PACKAGE" "$arch" <<<"$release")" || die "could not read the latest release of $repo"
   tag="$(sed -n 1p <<<"$fields")"
   url="$(sed -n 2p <<<"$fields")"
   sums_url="$(sed -n 3p <<<"$fields")"
 
-  [ -n "$url" ] || die "release $tag has no package for $codename on $arch"
+  [ -n "$url" ] || die "release $tag has no package for $arch"
   [ -n "$sums_url" ] || die "release $tag has no SHA256SUMS to check the download against"
   name="${url##*/}"
   version="${name#"${PACKAGE}_"}"

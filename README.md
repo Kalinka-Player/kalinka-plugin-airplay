@@ -54,28 +54,28 @@ and says so in its settings. Only one AirPlay 2 receiver can run per host.
 
 ## Installation
 
-On the Kalinka server (Debian 12 or 13, Raspberry Pi OS 64-bit, DietPi or
-Ubuntu 24.04; amd64 or arm64), install or upgrade to the latest release with:
+On the Kalinka server (Debian 13, or Raspberry Pi OS 13 or DietPi based on
+it; amd64 or arm64), install or upgrade to the latest release with:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Kalinka-Player/kalinka-plugin-airplay/main/scripts/install-latest.sh | sudo bash
 ```
 
-The script picks the `.deb` for the machine's distribution release and
-architecture, checks it against the release's `SHA256SUMS` and installs it
-with apt; Kalinka restarts by itself. To install by hand, download
-`SHA256SUMS` and the package whose name carries your release and architecture
-from the [latest release](https://github.com/Kalinka-Player/kalinka-plugin-airplay/releases/latest),
-such as `kalinka-plugin-airplay_<version>+trixie_arm64.deb` for a Raspberry Pi
-on Raspberry Pi OS 13, then:
+The script picks the `.deb` for the machine's architecture, checks it against
+the release's `SHA256SUMS` and installs it with apt; Kalinka restarts by
+itself. To install by hand, download `SHA256SUMS` and the package for your
+architecture from the [latest release](https://github.com/Kalinka-Player/kalinka-plugin-airplay/releases/latest),
+such as `kalinka-plugin-airplay_<version>_arm64.deb` for a Raspberry Pi on
+Raspberry Pi OS 13, then:
 
 ```sh
 sha256sum -c SHA256SUMS --ignore-missing
-sudo apt install ./kalinka-plugin-airplay_<version>+trixie_arm64.deb
+sudo apt install ./kalinka-plugin-airplay_<version>_arm64.deb
 ```
 
-The package bundles shairport-sync 5.5.2 and nqptp 1.2.8 with their source,
-and a `kalinka.service` drop-in granting `CAP_NET_BIND_SERVICE` for nqptp.
+The package bundles shairport-sync 5.5.2 and nqptp 1.2.8, built against
+Debian 13's libraries, with their source, and a `kalinka.service` drop-in
+granting `CAP_NET_BIND_SERVICE` for nqptp.
 Keep a distribution `shairport-sync` or `nqptp` service disabled. See
 [`debian/README.Debian`](debian/README.Debian) for firewall ports.
 

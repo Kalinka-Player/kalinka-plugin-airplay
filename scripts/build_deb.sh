@@ -18,18 +18,14 @@ done
 use_native_build "$1"
 
 # The binaries are built on the machine that packages them, against its
-# distribution's FFmpeg and other libraries, whose sonames differ between
-# releases: the package is for this release alone, and says so in its version.
+# distribution's FFmpeg and other libraries; dpkg-shlibdeps records them in
+# Depends, so the package installs only where those libraries are. Releases
+# build on Debian 13. The Debian version is the plugin's own version, which
+# Kalinka's plugin catalog requires of a package.
 arch="$(dpkg --print-architecture)"
-codename="$(. /etc/os-release && printf '%s' "${VERSION_CODENAME:-}")"
-if [[ -z "$codename" ]]; then
-    echo "/etc/os-release names no VERSION_CODENAME to build for." >&2
-    exit 1
-fi
 work="$(mktemp -d "${TMPDIR:-/tmp}/kalinka-airplay-deb.XXXXXXXX")"
 trap 'rm -rf -- "$work"' EXIT
 build_fresh_wheel "$work/wheels"
-package_version="$package_version+$codename"
 dpkg --validate-version "$package_version"
 
 pkgroot="$work/pkgroot"

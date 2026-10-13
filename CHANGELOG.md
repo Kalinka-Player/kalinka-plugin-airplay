@@ -2,6 +2,14 @@
 
 Curated, user-facing notes per release. Add a `## <version>` section before tagging — the release workflow puts the matching section into the GitHub Release body.
 
+## 0.1.1
+
+### Fixed
+- **Kalinka's plugin catalog now offers the plugin.** The 0.1.0 packages carried the distribution release in their Debian version, as in `0.1.0+trixie`, which the catalog rejects as not matching the release. Packages are now versioned like Kalinka's other plugins, `0.1.1`, one per architecture.
+
+### Changed
+- Packages are built for Debian 13 only, which covers Raspberry Pi OS 13 and DietPi based on it; there are no Debian 12 or Ubuntu 24.04 packages any more. The bundled shairport-sync links Debian 13's FFmpeg and other libraries, which apt checks on install.
+
 ## 0.1.0
 
 First release.

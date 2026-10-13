@@ -1,11 +1,12 @@
 name: Release
 
 # Publishes, for a `kalinka-plugin-airplay-v*` tag or an existing tag via
-# workflow_dispatch, one .deb per distribution release and architecture, and
-# the source of the bundled shairport-sync and nqptp. The bundled binaries
-# link their distribution's FFmpeg and other libraries, whose sonames change
-# between releases, so each package installs only on the release it was built
-# on.
+# workflow_dispatch, one .deb per architecture and the source of the bundled
+# shairport-sync and nqptp. The bundled binaries link Debian 13's FFmpeg and
+# other libraries, which dpkg-shlibdeps records in Depends, so the packages
+# install on Debian 13 and the Raspberry Pi OS and DietPi releases based on
+# it. The Debian version is the release version, as Kalinka's plugin catalog
+# requires of a package.
 
 on:
   push:
@@ -31,17 +32,19 @@ jobs:
       ref: ${{ github.event.inputs.tag || github.ref }}
 
   deb:
-    name: Deb (${{ matrix.image }}, ${{ matrix.arch }})
+    name: Deb (${{ matrix.arch }})
     needs: tests
     strategy:
       fail-fast: false
       matrix:
-        # Debian 12 and 13 cover Raspberry Pi OS and DietPi on the same bases.
-        image: ['debian:bookworm', 'debian:trixie', 'ubuntu:24.04']
-        arch: [amd64, arm64]
-    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     container:
-      image: ${{ matrix.image }}
+      image: debian:trixie
     env:
       DEBIAN_FRONTEND: noninteractive
     steps:
@@ -73,7 +76,7 @@ jobs:
           dpkg-deb --info "$deb"
           dpkg-deb --contents "$deb"
           case "$(dpkg-deb -f "$deb" Version)" in
-            *~dev*|*+g*) echo "$deb is not a release version; is $TAG on this commit?" >&2; exit 1 ;;
+            *~dev*|*+*) echo "$deb is not a release version; is $TAG on this commit?" >&2; exit 1 ;;
           esac
           mkdir -p out
           mv "$deb" out/
@@ -81,7 +84,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: deb-${{ strategy.job-index }}
+          name: deb-${{ matrix.arch }}
           path: out/*
           if-no-files-found: error
 
@@ -132,7 +135,7 @@ jobs:
           fi
 
           # Read back from the package, so the notes never disagree with apt.
-          SDK=$(dpkg-deb -f release/*+trixie_amd64.deb Depends | tr ',' '\n' \
+          SDK=$(dpkg-deb -f release/*_amd64.deb Depends | tr ',' '\n' \
             | sed -n 's/^ *\(kalinka-plugin-sdk .*\)$/\1/p' | paste -sd, - | sed 's/,/, /g')
 
           cat >> notes.md <<EOF
@@ -144,13 +147,13 @@ jobs:
           curl -fsSL https://raw.githubusercontent.com/$GITHUB_REPOSITORY/main/scripts/install-latest.sh | sudo bash
           \`\`\`
 
-          It picks the package for the machine's distribution release and architecture. To install by hand, download the one for yours — the release is in the name: \`+trixie\` for Debian 13 and Raspberry Pi OS or DietPi based on it, \`+bookworm\` for those based on Debian 12, \`+noble\` for Ubuntu 24.04; \`arm64\` for a Raspberry Pi running a 64-bit OS, \`amd64\` for a PC — verify it with \`sha256sum -c SHA256SUMS --ignore-missing\`, and install it:
+          It picks the package for the machine's architecture. To install by hand on Debian 13, or Raspberry Pi OS or DietPi based on it, download the one for yours — \`arm64\` for a Raspberry Pi running a 64-bit OS, \`amd64\` for a PC — verify it with \`sha256sum -c SHA256SUMS --ignore-missing\`, and install it:
 
           \`\`\`sh
-          sudo apt install ./kalinka-plugin-airplay_${VERSION}+trixie_arm64.deb
+          sudo apt install ./kalinka-plugin-airplay_${VERSION}_arm64.deb
           \`\`\`
 
-          Each package bundles shairport-sync 5.5.2 with AirPlay 2 and nqptp 1.2.8, whose source is attached here and shipped in the package, and requires \`${SDK}\`, which comes with a compatible Kalinka server. Keep a distribution \`shairport-sync\` or \`nqptp\` service disabled.
+          Each package bundles shairport-sync 5.5.2 with AirPlay 2 and nqptp 1.2.8, built against Debian 13's libraries, whose source is attached here and shipped in the package, and requires \`${SDK}\`, which comes with a compatible Kalinka server. Keep a distribution \`shairport-sync\` or \`nqptp\` service disabled.
           EOF
 
           if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then

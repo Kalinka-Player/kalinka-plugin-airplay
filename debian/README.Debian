@@ -3,7 +3,7 @@ AirPlay plugin for Kalinka
 
 This package installs the Python wheel under /opt/kalinka/wheels, and
 shairport-sync 5.5.2 (with AirPlay 2) and nqptp 1.2.8, built for this
-architecture, under /usr/libexec/kalinka-plugin-airplay. Their complete
+architecture on Debian 13, under /usr/libexec/kalinka-plugin-airplay. Their complete
 source is in /usr/share/kalinka-plugin-airplay/source. The
 kalinka-server-restart dpkg trigger asks the server to restart; Kalinka's
 bootstrap then installs the wheel into its managed environment. The plugin
