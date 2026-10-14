@@ -9,6 +9,7 @@ import pytest
 from kalinka_server.live_content import serve
 from starlette.requests import Request
 
+from kalinka_plugin_airplay import segment as segment_module
 from kalinka_plugin_airplay.child import ChildError
 from kalinka_plugin_airplay.segment import (
     SegmentFormat,
@@ -132,6 +133,41 @@ async def test_the_server_serves_a_segment_while_it_is_encoded(tmp_path):
 
 
 @needs_flac
+@pytest.mark.parametrize("rate", [44100, 48000])
+@pytest.mark.parametrize("bits", [16, 24])
+async def test_silence_is_decodable_before_the_encoder_finishes(tmp_path, rate, bits):
+    format = SegmentFormat(rate, bits)
+    segment = segment_factory(FLAC, tmp_path, 1 << 24)(format)
+    await segment.start()
+    request = Request({"type": "http", "method": "GET", "headers": []})
+    response = await serve(segment.capture, "audio/flac", request)
+    encoded = bytearray()
+    try:
+        # The minimum prebuffer must produce audio, even when it compresses
+        # to much less than a stdio buffer. Check another batch as well so a
+        # header flush alone cannot satisfy this regression.
+        for batch in range(2):
+            await segment.feed(bytes(rate // 10 * FRAME_BYTES))
+            minimum = (batch * rate // 10 + rate // 20) * format.frame_bytes
+            async with asyncio.timeout(2):
+                while True:
+                    encoded.extend(await anext(response.body_iterator))
+                    try:
+                        pcm = await asyncio.to_thread(decode, bytes(encoded))
+                    except subprocess.CalledProcessError:
+                        # A pipe read may end partway through a FLAC frame.
+                        continue
+                    if len(pcm) >= minimum:
+                        break
+            assert not any(pcm)
+            assert not segment.capture.complete
+    finally:
+        await response.body_iterator.aclose()
+        await response.reader.aclose()
+        await segment.end()
+
+
+@needs_flac
 async def test_a_segment_outlasts_its_buffer_while_the_renderer_keeps_up(tmp_path):
     noise = os.urandom(int(RATE * 0.1) * FRAME_BYTES)
     segment = segment_factory(FLAC, tmp_path, 256 * 1024)(HIRES)
@@ -162,5 +198,11 @@ async def test_a_full_buffer_fails_the_segment(tmp_path):
 
 
 async def test_a_missing_encoder_is_reported(tmp_path):
-    with pytest.raises(ChildError, match="could not start"):
+    with pytest.raises(ChildError, match="FLAC encoder.*does not run"):
         await check_encoder(str(tmp_path / "flac"))
+
+
+async def test_a_missing_stdout_buffering_helper_is_reported(tmp_path, monkeypatch):
+    monkeypatch.setattr(segment_module, "STDBUF", str(tmp_path / "stdbuf"))
+    with pytest.raises(ChildError, match="stdbuf could not start"):
+        await check_encoder("/usr/bin/flac")

@@ -14,6 +14,7 @@ from .shairport import CHANNELS, FRAME_BYTES, SAMPLE_BYTES
 logger = logging.getLogger(__name__)
 
 _READ_BYTES = 64 * 1024
+STDBUF = "/usr/bin/stdbuf"
 
 
 @dataclass(frozen=True)
@@ -46,6 +47,10 @@ class SegmentFormat:
 def flac_argv(executable: str, format: SegmentFormat) -> list[str]:
     """Raw PCM on stdin to a FLAC stream on stdout, its length left unknown."""
     return [
+        # FLAC writes through stdio: silence can take seconds to fill its
+        # stdout buffer. Emit each encoded frame as soon as it is ready.
+        STDBUF,
+        "--output=0",
         executable,
         "--silent",
         "--force-raw-format",
@@ -159,8 +164,8 @@ def segment_factory(flac_executable: str, directory: Path, max_bytes: int) -> Se
 
 
 async def check_encoder(flac_executable: str) -> None:
-    """@throw ChildError when the FLAC encoder cannot run."""
-    probe = Child("flac", [flac_executable, "--version"])
+    """@throw ChildError when the encoder or its stdout buffering helper cannot run."""
+    probe = Child("stdbuf", [STDBUF, "--output=0", flac_executable, "--version"])
     await probe.start()
     if await probe.wait() != 0:
         raise ChildError(f"the FLAC encoder at {flac_executable} does not run")
