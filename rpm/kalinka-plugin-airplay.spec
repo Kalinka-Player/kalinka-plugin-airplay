@@ -19,6 +19,7 @@ URL:            https://github.com/Kalinka-Player/kalinka-plugin-airplay
 Requires:       kalinka-server
 Requires:       python3 >= 3.11
 Requires:       flac
+Requires:       /usr/bin/stdbuf
 Requires:       avahi
 # rpmbuild adds the bundled binaries' shared-library requirements.
 

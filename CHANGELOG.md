@@ -2,6 +2,12 @@
 
 Curated, user-facing notes per release. Add a `## <version>` section before tagging — the release workflow puts the matching section into the GitHub Release body.
 
+## Unreleased
+
+- Fixed: quiet audio and silence no longer wait for the FLAC encoder's stdout
+  buffer to fill, which could delay playback by several seconds. Encoded audio
+  is now delivered as soon as it is ready, including while a stream is playing.
+
 ## 0.2.2
 
 - Fixed: a track change inside an AirPlay stream no longer cuts it. The sender

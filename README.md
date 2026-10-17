@@ -59,6 +59,10 @@ SDK 3.11 (`DirectPlaybackSession.show()` and `kalinka_plugin_sdk.live_capture`).
 The package will not install on an older server. The renderer needs Kalinka's
 live FLAC support, which it has had since SDK 3.5.
 
+The server also needs `flac` and GNU `stdbuf` from coreutils. The plugin runs
+the encoder with unbuffered stdout so quiet audio and silence reach the
+renderer promptly. The packages and build dependency script install both.
+
 AirPlay 2 needs UDP ports 319 and 320 to itself for nqptp. When another PTP
 service holds them, or *Offer AirPlay 2* is off, Kalinka offers classic AirPlay
 and says so in its settings. Only one AirPlay 2 receiver can run per host.
