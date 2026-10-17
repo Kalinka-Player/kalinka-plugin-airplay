@@ -2,7 +2,7 @@
 
 Curated, user-facing notes per release. Add a `## <version>` section before tagging — the release workflow puts the matching section into the GitHub Release body.
 
-## Unreleased
+## 0.2.3
 
 - Fixed: quiet audio and silence no longer wait for the FLAC encoder's stdout
   buffer to fill, which could delay playback by several seconds. Encoded audio
