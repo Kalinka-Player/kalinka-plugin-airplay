@@ -11,7 +11,6 @@ from typing import Optional
 
 from .child import Child, ChildError
 from .metadata import EventDecoder, ItemParser
-from .segment import check_encoder
 from .service import AirPlayService
 from .shairport import ReceiverSettings, probe, render_config
 
@@ -26,7 +25,6 @@ _NQPTP_SETTLE_S = 0.5
 class ReceiverOptions:
     executable: str
     nqptp_executable: str
-    flac_executable: str
     name: str
     port: int
     airplay2: bool
@@ -143,7 +141,6 @@ class Receiver:
     async def _run_once(self) -> None:
         options = self._options
         build = await probe(options.executable)
-        await check_encoder(options.flac_executable)
         self._state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         children: list[Child] = []
         try:

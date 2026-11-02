@@ -56,14 +56,18 @@ def remote():
 
 @pytest.fixture
 def service(direct, segments, remote):
-    return AirPlayService(direct, segments[1], remote, prebuffer_ms=300)
+    return AirPlayService(direct, segments[1], remote, )
 
 
 async def play(service, seconds=0.5, stream=CD):
     """Audio as the receiver sends it: its format announced, then PCM."""
     await service.event(stream)
+    await service.event(OutputFormat(stream.rate, "S24_3LE", 2))
     for _ in range(round(seconds * 10)):
         await service.audio(CHUNK)
+    # Output acquisition runs independently of the producer.
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
 
 
 async def settle(service):
@@ -71,36 +75,31 @@ async def settle(service):
     await asyncio.gather(*list(service._tasks))
 
 
-async def test_audio_takes_the_output_and_plays_once_the_buffer_is_full(
-    service, direct, segments
-):
+async def test_audio_starts_without_plugin_prebuffer(service, direct, segments):
     await service.event(PlayBegan())
-    await service.event(CD)
-    await service.audio(CHUNK)
-    hold = direct.hold
-    assert hold.named("play") == []
-    await play(service, 0.2)
-    [(_, source, track)] = hold.named("play")
-    assert source.sequential and source.format == "audio/flac"
-    assert source.source.module == "airplay"
-    assert source.source.asset_id == segments[0][0].id == service.segment.id
+    await play(service, 0.1)
+    [(_, source, track)] = direct.hold.named("play")
+    assert source is segments[0][0].source
+    assert source.format.sample_format == "S24_3LE"
     assert track.title == "AirPlay"
     await play(service, 1)
-    assert len(hold.named("play")) == 1
+    assert len(direct.hold.named("play")) == 1
 
 
-async def test_no_renderer_means_no_audio_until_the_sender_plays_again(
-    service, direct, segments
-):
+async def test_no_renderer_keeps_draining_and_retries(service, direct, segments):
     direct.unavailable = "no renderer is connected"
     await play(service)
     assert service.output_error == "no renderer is connected"
+    first = service.segment
+    await play(service)
+    assert service.segment is first and first.fed_ms >= 1000
     direct.unavailable = None
-    await play(service)
-    assert direct.holds == [] and segments[0] == []
-    await service.event(PlayBegan())
-    await play(service)
+    async with asyncio.timeout(3):
+        while not direct.holds:
+            await asyncio.sleep(0.01)
     assert len(direct.hold.named("play")) == 1
+    assert service.segment is first
+    await service.close()
 
 
 async def test_a_sender_pause_or_seek_drops_what_kalinka_already_has(
@@ -113,7 +112,7 @@ async def test_a_sender_pause_or_seek_drops_what_kalinka_already_has(
     assert service.segment is None
     await play(service)
     [_, (_, source, _)] = direct.hold.named("play")
-    assert source.source.asset_id == segments[0][1].id != first.id
+    assert source.reference.live_source_id == segments[0][1].id != first.id
     assert len(direct.holds) == 1
 
 
@@ -211,12 +210,13 @@ async def test_a_format_switch_ends_the_segment_and_the_next_is_in_the_new_forma
 ):
     await play(service)
     await service.event(HIRES)
+    await service.event(OutputFormat(48000, "S24_3LE", 2))
     first = segments[0][0]
     assert first.ended and direct.hold.named("stop") and service.segment is None
     await play(service, stream=HIRES)
     [_, (_, source, _)] = direct.hold.named("play")
     second = segments[0][1]
-    assert source.source.asset_id == second.id
+    assert source.reference.live_source_id == second.id
     assert second.format == SegmentFormat(48000, 24)
     assert service.status.endswith("(AirPlay, ALAC 24-bit 48 kHz)")
 
@@ -379,13 +379,24 @@ async def test_a_renderer_error_stops_the_stream_and_pauses_the_sender(
     assert service.output_error is None
 
 
-async def test_an_encoder_failure_stops_the_stream(service, segments, remote):
-    await service.event(CD)
-    await service.audio(CHUNK)
-    segments[0][0].failure = "flac stopped"
-    await service.audio(CHUNK)
-    await settle(service)
-    assert service.output_error == "flac stopped" and segments[0][0].ended
+async def test_output_acquisition_cannot_block_pcm(service, direct, segments):
+    entered, release = asyncio.Event(), asyncio.Event()
+    acquire = direct.acquire
+
+    async def slow(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        return await acquire(*args, **kwargs)
+
+    direct.acquire = slow
+    await play(service, 0.1)
+    await entered.wait()
+    async with asyncio.timeout(0.2):
+        await play(service, 1)
+    assert service.segment.fed_ms == 1100
+    release.set()
+    await asyncio.sleep(0)
+    await service.close()
 
 
 async def test_a_hold_ended_under_the_service_is_taken_again(service, direct):
@@ -406,3 +417,49 @@ async def test_closing_ends_everything(service, direct, segments):
     await play(service)
     await service.close()
     assert direct.hold.named("release") and segments[0][0].ended
+
+
+async def test_old_hold_callbacks_cannot_pause_a_new_session(service, direct, remote):
+    await play(service)
+    old = direct.hold.listener
+    # Queue the callback, then complete the old session before it executes.
+    old.on_command(TransportRequest(TransportKind.PAUSE))
+    await service.event(PlayEnded())
+    await service.event(PlayBegan())
+    await play(service)
+    await settle(service)
+    assert not service._suspended
+    assert remote.sent == []
+    assert service.segment is not None
+    assert len(direct.holds) == 2
+    await service.close()
+
+
+@pytest.mark.parametrize("end_session", [False, True])
+async def test_interrupt_drains_without_recreating_source_during_output_cleanup(
+    service, direct, segments, end_session
+):
+    await play(service)
+    entered, release = asyncio.Event(), asyncio.Event()
+    hold = direct.hold
+    operation = hold.release if end_session else hold.stop
+
+    async def delayed():
+        entered.set()
+        await release.wait()
+        await operation()
+
+    if end_session:
+        hold.release = delayed
+    else:
+        hold.stop = delayed
+    cutting = asyncio.create_task(service.event(PlayEnded() if end_session else Interrupted()))
+    await entered.wait()
+    # This must return immediately while output cleanup is still blocked.
+    async with asyncio.timeout(0.2):
+        await service.audio(CHUNK)
+    assert len(segments[0]) == 1
+    release.set()
+    await cutting
+    assert service.segment is None
+    await service.close()

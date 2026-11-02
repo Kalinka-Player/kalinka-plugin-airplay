@@ -1,12 +1,12 @@
 name: Companion Kalinka core
-description: Check out the Kalinka core with SDK 3.11 (DirectPlaybackSession.show, live_capture) into ./core.
+description: Check out the Kalinka core with SDK 3.21 and shared live PCM playback into ./core.
 runs:
   using: composite
   steps:
     - uses: actions/checkout@v4
       with:
         repository: Kalinka-Player/KalinkaPlayer
-        # The oldest server release with SDK 3.11.
-        ref: kalinka-v5.9.0
+        # Pin the companion live PCM implementation while its PR is reviewed.
+        ref: d84ece01c5e185444485dd34408fa51a81e917a8
         path: core
         fetch-depth: 0

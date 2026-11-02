@@ -26,7 +26,7 @@ from kalinka_plugin_sdk.direct_playback import (
     TransportKind,
     TransportRequest,
 )
-from kalinka_plugin_sdk.inputmodule import ModuleAsset, TrackSource
+from kalinka_plugin_sdk.live_audio import LivePolicy
 
 from .metadata import (
     PROGRESS_RATE,
@@ -104,19 +104,17 @@ class AirPlayService:
     @brief Plays one AirPlay receiver's audio through the output Kalinka plays through.
 
     The receiver hands it PCM as the sender plays and the sender's events as
-    they happen; it takes the output with DirectPlayback, serves the audio as
-    live FLAC segments, and shows the sender's track. It is the listener of
-    the hold it takes.
+    they happen; it takes the output with DirectPlayback, publishes PCM through
+    Core live sources, and shows the sender's track. It listens to that hold.
 
     A Kalinka client that takes the output, or pauses, drops the sender's
     audio until the sender plays again: after a flush, a resume or a new
     session. A classic sender is told to pause as well; AirPlay 2 takes no
-    remote control, so its sender keeps playing to nobody. An output lost
-    to idling or to a renderer change is taken again as soon as the
-    sender's audio flows.
+    remote control, so its sender keeps playing to nobody. Core preserves the hold on renderer changes and recovers temporary output
+    losses without interrupting capture.
 
-    Each segment is encoded at the sender's own rate and depth, which the
-    receiver announces before the first frame and at every switch. Audio
+    Each source carries the receiver's actual PCM rate and layout, announced
+    before the first frame and at every switch. Audio
     that arrives before an announcement is dropped rather than misread, and
     a switch ends the segment so that no byte is read as another format.
 
@@ -130,12 +128,15 @@ class AirPlayService:
         new_segment: SegmentFactory,
         remote: SenderRemote,
         *,
-        prebuffer_ms: int,
+        policy: LivePolicy = LivePolicy(),
     ):
         self._direct = direct
         self._new_segment = new_segment
         self._remote = remote
-        self._prebuffer_ms = prebuffer_ms
+        self._policy = policy
+        self._claim_task: Optional[asyncio.Task] = None
+        self._cutting = 0
+        self._listener_token = None
         self.artwork = ArtworkStore()
         self._lock = asyncio.Lock()
         self._tasks: set[asyncio.Task] = set()
@@ -163,6 +164,8 @@ class AirPlayService:
 
     @property
     def status(self) -> str:
+        if self.output_error and self._segment is not None:
+            return f"Receiving from {self._sender or 'an AirPlay sender'}; {self.output_error}"
         if self._hold is not None and self._hold.active:
             playing = f"Playing from {self._sender or 'an AirPlay sender'}"
             return f"{playing} ({self.stream_description})" if self._stream else playing
@@ -178,20 +181,19 @@ class AirPlayService:
 
     async def audio(self, pcm: bytes) -> None:
         """PCM from the receiver, in real time while the sender plays."""
-        async with self._lock:
-            if self._suspended:
-                return
-            if self._format is None:
-                # Until the receiver has said what it writes, the bytes cannot be read.
-                self._dropped += len(pcm)
-                return
-            if self._segment is None and not await self._begin_segment():
-                return
-            await self._segment.feed(pcm)
-            if self._segment.failure:
-                await self._lose_output(self._segment.failure)
-            elif not self._segment_playing and self._segment.fed_ms >= self._prebuffer_ms:
-                await self._play_segment()
+        # No output/network awaits on the receiver's drain path. Event handlers
+        # replace _segment before awaiting cleanup, so the event loop serializes
+        # these immediate writes with format changes and disconnects.
+        if self._suspended or self._cutting:
+            return
+        if self._format is None:
+            self._dropped += len(pcm)
+            return
+        if self._segment is None:
+            self._segment = self._new_segment(self._format)
+        self._segment.feed(pcm)
+        if not self._segment_playing and self._claim_task is None:
+            self._claim_task = asyncio.create_task(self._play_segment(self._segment))
 
     async def event(self, event: Event) -> None:
         async with self._lock:
@@ -209,7 +211,7 @@ class AirPlayService:
                 self._stream_type = event.kind
             case StreamFormat():
                 self._stream = event
-                await self._use_format(SegmentFormat(event.rate, event.bits))
+                # Sender metadata is descriptive; OutputFormat describes the bytes.
             case OutputFormat():
                 await self._output_declared(event)
             case Interrupted():
@@ -254,7 +256,7 @@ class AirPlayService:
         await self._remote.aclose()
 
     async def _use_format(self, format: SegmentFormat) -> None:
-        """Encode from here on at this rate and depth; a running segment ends first."""
+        """A changed receiver format starts a fresh source."""
         if format == self._format:
             return
         if self._dropped:
@@ -273,39 +275,50 @@ class AirPlayService:
                 f"{output.channels} channels, which Kalinka cannot read"
             )
             logger.error("%s", self.output_error)
-            await self._end_segment()
             self._format = None
+            await self._end_segment()
             return
-        bits = self._format.bits if self._format else 24
+        bits = self._stream.bits if self._stream else 24
         await self._use_format(SegmentFormat(output.rate, bits))
 
-    async def _begin_segment(self) -> bool:
-        if self._hold is None or not self._hold.active:
-            try:
-                self._hold = await self._direct.acquire(TITLE, self, seekable=False)
-            except OutputUnavailable as error:
-                self._hold = None
-                self._suspended = True
-                self.output_error = str(error)
-                logger.warning("AirPlay cannot play: %s", error)
-                return False
-            await self._apply_volume()
-        segment = self._new_segment(self._format)
-        await segment.start()
-        self._segment, self._segment_playing = segment, False
-        return True
-
-    async def _play_segment(self) -> None:
-        source = TrackSource(
-            source=ModuleAsset(module=MODULE, asset_id=self._segment.id),
-            format="audio/flac",
-            sequential=True,
-        )
-        track = self._track()
-        if await self._on_hold(lambda hold: hold.play(source, track)):
-            self._segment_playing = True
-        else:
-            await self._end_segment()
+    async def _play_segment(self, segment: Segment) -> None:
+        pending_hold = None
+        try:
+            while self._segment is segment and not self._suspended:
+                try:
+                    if self._hold is None or not self._hold.active:
+                        token = object()
+                        self._listener_token = token
+                        pending_hold = hold = await self._direct.acquire(
+                            TITLE, _Listener(self, token), seekable=False
+                        )
+                        async with self._lock:
+                            if self._segment is not segment or self._suspended:
+                                if hold.active:
+                                    await hold.release()
+                                return
+                            self._hold = hold
+                            pending_hold = None
+                            await self._apply_volume()
+                    async with self._lock:
+                        if self._segment is not segment or self._suspended:
+                            return
+                        if await self._on_hold(lambda hold: hold.play_live(
+                            segment.source, self._track(), policy=self._policy
+                        )):
+                            self._segment_playing = True
+                            self.output_error = None
+                            return
+                except OutputUnavailable as error:
+                    # Keep draining into the bounded Core source while waiting
+                    # for an output. No old PCM is replayed when one appears.
+                    self.output_error = str(error)
+                await asyncio.sleep(2)
+        finally:
+            if pending_hold is not None and pending_hold.active:
+                await pending_hold.release()
+            if self._claim_task is asyncio.current_task():
+                self._claim_task = None
 
     def _flush_at_track_end(self, event: Interrupted) -> bool:
         """A flush up to the current track's end is the sender moving to the
@@ -332,18 +345,33 @@ class AirPlayService:
         that reaches the renderer while it still prepares a stream parks it
         until the next transport command, which a new stream is not.
         """
-        if self._segment_playing:
-            await self._on_hold(lambda hold: hold.stop())
-        await self._end_segment()
+        self._cutting += 1
+        try:
+            if self._segment_playing:
+                await self._on_hold(lambda hold: hold.stop())
+            await self._end_segment()
+        finally:
+            self._cutting -= 1
 
     async def _end_segment(self) -> None:
-        segment, self._segment = self._segment, None
-        self._segment_playing = False
-        if segment is not None:
-            await segment.end()
+        self._cutting += 1
+        try:
+            segment, self._segment = self._segment, None
+            self._segment_playing = False
+            claim, self._claim_task = self._claim_task, None
+            if segment is not None:
+                segment.close()
+            if claim is not None and claim is not asyncio.current_task():
+                claim.cancel()
+                await asyncio.gather(claim, return_exceptions=True)
+        finally:
+            self._cutting -= 1
 
     async def _end_session(self) -> None:
+        self._suspended = True
+        self._format = None
         await self._end_segment()
+        self._listener_token = None
         hold, self._hold = self._hold, None
         if hold is not None and hold.active:
             try:
@@ -430,13 +458,15 @@ class AirPlayService:
 
     def on_state(self, state: PlaybackState) -> None:
         if state.state == PlayerStateEnum.ERROR:
-            self._spawn(self._renderer_failed(state.message or "the renderer failed"))
+            self._spawn(self._renderer_failed(
+                state.message or "the renderer failed", self._listener_token
+            ))
         elif state.state == PlayerStateEnum.PLAYING:
             self.output_error = None
 
-    async def _renderer_failed(self, message: str) -> None:
+    async def _renderer_failed(self, message: str, token) -> None:
         async with self._lock:
-            if self._segment_playing:
+            if token is self._listener_token and self._segment_playing:
                 await self._lose_output(message)
 
     def on_finished(self) -> None:
@@ -449,17 +479,23 @@ class AirPlayService:
         pass
 
     def on_command(self, request: TransportRequest) -> None:
-        self._spawn(self._command(request))
+        self._spawn(self._command(request, self._listener_token))
 
-    async def _command(self, request: TransportRequest) -> None:
+    async def _command(self, request: TransportRequest, token) -> None:
+        if token is not self._listener_token:
+            return
         match request.kind:
             case TransportKind.PAUSE:
                 async with self._lock:
+                    if token is not self._listener_token:
+                        return
                     self._suspended = True
                     await self._interrupt()
                 await self._remote.send(PAUSE)
             case TransportKind.RESUME:
                 async with self._lock:
+                    if token is not self._listener_token:
+                        return
                     self._suspended = False
                 await self._remote.send(PLAY)
             case TransportKind.NEXT:
@@ -468,14 +504,33 @@ class AirPlayService:
                 await self._remote.send(PREVIOUS)
 
     def on_revoked(self, reason: RevokeReason) -> None:
-        self._spawn(self._revoked(reason))
+        self._spawn(self._revoked(reason, self._listener_token))
 
-    async def _revoked(self, reason: RevokeReason) -> None:
+    async def _revoked(self, reason: RevokeReason, token) -> None:
         """A takeover silences the sender; an idle or lost output is taken again on the next audio."""
         taken_over = reason in _TAKEN_OVER
         async with self._lock:
+            if token is not self._listener_token:
+                return
+            self._listener_token = None
             self._hold = None
-            await self._end_segment()
             self._suspended |= taken_over
+            await self._end_segment()
         if taken_over:
             await self._remote.send(PAUSE)
+
+
+class _Listener:
+    """Ignore callbacks from a hold superseded by another receiver session."""
+
+    def __init__(self, service: AirPlayService, token: object):
+        self.service, self.token = service, token
+
+    def __getattr__(self, name):
+        if not name.startswith("on_"):
+            raise AttributeError(name)
+
+        def forward(*args):
+            if self.service._listener_token is self.token:
+                getattr(self.service, name)(*args)
+        return forward
