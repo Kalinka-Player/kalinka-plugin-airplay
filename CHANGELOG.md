@@ -2,6 +2,15 @@
 
 Curated, user-facing notes per release. Add a `## <version>` section before tagging — the release workflow puts the matching section into the GitHub Release body.
 
+## Unreleased
+
+- Forward receiver PCM through Core live audio without FLAC encoding, disk
+  spooling, 16-bit narrowing or a startup prebuffer.
+- Keep capture and input ownership across renderer changes; drain independently
+  of output acquisition and retry while an output is unavailable.
+- Requires SDK 3.21 and matching Core/renderers with live PCM v1. Retire encoder,
+  cache and prebuffer settings; review saved renderer-delay tuning after upgrade.
+
 ## 0.2.3
 
 - Fixed: quiet audio and silence no longer wait for the FLAC encoder's stdout

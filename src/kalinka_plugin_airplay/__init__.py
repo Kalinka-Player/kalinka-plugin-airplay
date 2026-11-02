@@ -9,10 +9,11 @@ from kalinka_plugin_sdk import paths
 from kalinka_plugin_sdk.datamodel import EmptyList
 from kalinka_plugin_sdk.dynamic_fields import DynamicFieldDecl
 from kalinka_plugin_sdk.inputmodule import ContentInfo, InputModule
+from kalinka_plugin_sdk.live_audio import LivePolicy
 from kalinka_plugin_sdk.module_config import ModuleConfig
 from kalinka_plugin_sdk.module_health import ModuleHealthState, ModuleState
 from kalinka_plugin_sdk.plugin import InputModulePlugin
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, model_validator
 
 from .receiver import Receiver, ReceiverOptions
 from .remote import SenderRemote
@@ -61,24 +62,20 @@ class AirPlayConfig(ModuleConfig):
         },
     )
     port: int = Field(default=7000, ge=1024, le=65535, title="Service port")
-    prebuffer_ms: int = Field(
-        default=500, ge=100, le=1500, title="Buffer before playing (ms)"
-    )
+    target_latency_ms: int = Field(default=60, ge=20, le=500, title="Live audio target (ms)")
+    max_buffer_ms: int = Field(default=250, ge=21, le=2000, title="Maximum live lag (ms)")
     renderer_delay_ms: int = Field(
-        default=300,
-        ge=0,
-        le=1000,
-        title="Renderer delay (ms)",
-        json_schema_extra={
-            "help": "How long the renderer takes to sound what it receives; tune it for lip sync with video."
-        },
+        default=0, ge=0, le=1000, title="Additional output delay (ms)",
+        description="Extra downstream DSP/device delay for lip sync; excludes Kalinka's live target.",
     )
-    cache_limit_mib: int = Field(
-        default=32, ge=1, le=128, title="Stream buffer limit (MiB)"
-    )
+
+    @model_validator(mode="after")
+    def validate_latency(self):
+        LivePolicy(self.target_latency_ms, self.max_buffer_ms)
+        return self
+
     executable: str = Field(default=f"{LIBEXEC}/shairport-sync", title="shairport-sync executable")
     nqptp_executable: str = Field(default=f"{LIBEXEC}/nqptp", title="nqptp executable")
-    flac_executable: str = Field(default="/usr/bin/flac", title="FLAC encoder")
 
 
 class AirPlayInput(InputModule):
@@ -104,9 +101,6 @@ class AirPlayInput(InputModule):
         service = self._plugin.service
         if service is None:
             return None
-        segment = service.segment
-        if segment is not None and segment.id == asset_id:
-            return ContentInfo(mime_type="audio/flac", live=segment.capture, cacheable=False)
         artwork = service.artwork.get(asset_id)
         if artwork is None:
             return None
@@ -118,7 +112,7 @@ class AirPlayInput(InputModule):
 
 class KalinkaPluginAirPlay(InputModulePlugin):
     PLUGIN_ID = MODULE
-    REQUIRES_SDK = ">=3.11,<4"
+    REQUIRES_SDK = ">=3.21,<4"
     CONFIG_MODEL = AirPlayConfig
     DYNAMIC_FIELDS: ClassVar[dict[str, DynamicFieldDecl]] = {
         "receiver_status": DynamicFieldDecl(section_id="", label="Receiver status", widget="text"),
@@ -140,24 +134,23 @@ class KalinkaPluginAirPlay(InputModulePlugin):
             return
         if context.direct_playback is None:
             raise RuntimeError("AirPlay requires Kalinka direct playback")
-        cache = Path(paths.cache_dir()) / MODULE
-        cache.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if context.live_audio is None:
+            raise RuntimeError("AirPlay requires Kalinka live PCM support (SDK 3.21)")
         self.service = AirPlayService(
             context.direct_playback,
-            segment_factory(config.flac_executable, cache, config.cache_limit_mib * 1024 * 1024),
+            segment_factory(context.live_audio),
             SenderRemote(),
-            prebuffer_ms=config.prebuffer_ms,
+            policy=LivePolicy(config.target_latency_ms, config.max_buffer_ms),
         )
         self.receiver = Receiver(
             ReceiverOptions(
                 executable=config.executable,
                 nqptp_executable=config.nqptp_executable,
-                flac_executable=config.flac_executable,
                 name=config.device_name,
                 port=config.port,
                 airplay2=config.airplay2,
                 # Audio leaves early by as much as Kalinka delays it, for lip sync.
-                latency_offset_s=-(config.prebuffer_ms + config.renderer_delay_ms) / 1000,
+                latency_offset_s=-(config.target_latency_ms + config.renderer_delay_ms) / 1000,
             ),
             self.service,
             Path(paths.state_dir()) / MODULE,

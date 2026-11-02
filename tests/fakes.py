@@ -1,9 +1,11 @@
 """Stand-ins for what the service talks to: the server's hold, segments, the sender."""
 
 import time
+import uuid
 
 from kalinka_plugin_sdk.datamodel import PlaybackState, PlayerStateEnum
 from kalinka_plugin_sdk.direct_playback import HoldEnded, OutputUnavailable
+from kalinka_plugin_sdk.live_audio import LiveAudioRef, PcmFormat
 
 
 class Segment:
@@ -13,17 +15,16 @@ class Segment:
         Segment.count += 1
         self.id = f"segment-{Segment.count}"
         self.format = format
+        self.source = PcmSource(PcmFormat(format.rate, 2, "S24_3LE"))
+        self.id = self.source.reference.live_source_id
         self.fed_ms = 0.0
         self.failure = None
-        self.started = self.ended = False
+        self.ended = False
 
-    async def start(self):
-        self.started = True
-
-    async def feed(self, pcm):
+    def feed(self, pcm):
         self.fed_ms += len(pcm) / 6 / (self.format.rate / 1000)
 
-    async def end(self):
+    def close(self):
         self.ended = True
 
 
@@ -41,7 +42,7 @@ class Hold:
             raise HoldEnded("ended")
         self.calls.append(call)
 
-    async def play(self, source, track):
+    async def play_live(self, source, track, *, policy):
         self._record("play", source, track)
 
     async def show(self, track, position_ms):
@@ -76,6 +77,7 @@ class Direct:
         if self.unavailable:
             raise OutputUnavailable(self.unavailable)
         self.holds.append(Hold())
+        self.holds[-1].listener = listener
         return self.holds[-1]
 
     @property
@@ -101,3 +103,24 @@ class Remote:
 
     async def aclose(self):
         pass
+
+
+class PcmSource:
+    def __init__(self, format):
+        self.reference = LiveAudioRef(live_source_id=uuid.uuid4().hex)
+        self.format = format
+        self.closed = False
+        self.data = bytearray()
+
+    def offer(self, pcm):
+        assert not self.closed
+        assert len(pcm) % self.format.frame_bytes == 0
+        self.data.extend(pcm)
+
+    def close(self):
+        self.closed = True
+
+
+class LiveAudio:
+    def create_pcm(self, format, *, max_buffer_ms=200):
+        return PcmSource(format)

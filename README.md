@@ -6,62 +6,51 @@ renderer selected in Kalinka. The renderer can be on another machine and is
 the only process that opens audio hardware.
 
 ```text
-iPhone ── AirPlay 2 / classic ── shairport-sync -o stdout ── PCM ────────▶ plugin ──▶ flac
-                                  nqptp (AirPlay 2 timing)    metadata FIFO ──▶ plugin
-                                                                                  │ live FLAC
-                                                                                  ▼
-                              Kalinka server /content/airplay/<segment> ◀── LiveCapture
-                                                                                  │ HTTP, X-Kalinka-Live
-                                                                                  ▼
-                                                              selected Kalinka renderer
+iPhone → shairport-sync → packed PCM → plugin → Core live source
+              ↓ metadata                          ↓ continuous HTTP
+           title/art/progress                selected Kalinka renderer
 ```
 
-The renderer is not told about AirPlay. It pulls a live FLAC stream from the
-server exactly as it pulls Spotify Connect's Ogg stream, so it needs nothing
-beyond Kalinka's existing live-stream support.
+The plugin forwards the receiver's PCM unchanged. Core owns a bounded memory
+ring and `/live-audio/<route>` responses. There is no FLAC encoder, stdbuf child,
+disk audio cache, or plugin-side prebuffer, for either local or remote outputs.
 
-- **Segments.** Each unbroken run of the sender's audio is one FLAC stream: a
-  `flac` process per segment, buffered in an SDK `LiveCapture`. A pause, seek or
-  takeover ends the segment and the next audio starts a new one, so nothing
-  stale is ever heard. A track change is none of these: the sender flushes up
-  to the end of the track it leaves, which the plugin tells from a seek by the
-  flush's timestamp, and the next track follows in the same stream without a
-  gap. The buffer lets go of what the renderer has read, so a segment may run
-  for hours: *Stream buffer limit* bounds only how far it gets ahead of the
-  renderer.
-- **Format.** Each segment is encoded at the sender's own sample rate and bit
-  depth, which shairport-sync announces before the first frame and at every
-  switch: 16-bit 44.1 kHz for classic AirPlay and AirPlay 2 realtime streams,
-  24-bit 48 kHz for Apple Music Lossless over AirPlay 2. Nothing is resampled
-  or padded, so Kalinka shows the format as it is. AAC streams, which Apple
-  Music sends below its lossless setting, decode to 24 bits. The codec Kalinka
-  names is FLAC, the lossless carrier between server and renderer, whatever
-  the sender used.
-- **Lip sync.** shairport-sync emits audio early by the plugin's buffer plus
-  the renderer's delay (`audio_backend_latency_offset_in_seconds`), so video on
-  the sender stays in sync. Tune *Renderer delay* if it does not.
-- **Now playing.** The sender's title, artist, album, cover art, progress and
-  volume come from shairport-sync's metadata pipe. A track change inside the
-  stream updates what clients show through `DirectPlaybackSession.show()`,
-  without restarting playback.
-- **Control.** The last to press play wins. Play from Kalinka's queue takes the
-  output back, and Kalinka pauses the sender. Pause, play, next and previous in
-  the Kalinka app go to the sender over DACP, which only classic AirPlay offers.
-  With an AirPlay 2 sender, pause and play stop and start Kalinka's own
-  playback while the sender keeps sending, and next and previous do nothing.
-  Seeking is done on the sender: the plugin acquires the output as not
-  seekable, so clients offer no position control.
+- **Output switching.** The receiver, PCM source and input hold survive a move
+  to another compatible renderer. Core prepares the output before selecting
+  fresh audio. Slow readers recover at the live edge instead of accumulating
+  seconds of old audio. Acquisition/retry never blocks receiver PCM draining.
+- **Format.** shairport-sync's output declaration supplies the actual rate and
+  packed 24-bit stereo layout. All six bytes of each frame are preserved, even
+  for a 16-bit sender. Input status retains the original codec/depth; renderer
+  media is PCM. A pause, seek or format change ends the interrupted source;
+  subsequent audio starts a new one. Metadata-only track changes keep playing.
+- **Timing.** Core/renderer use a shared live policy (60 ms target, 250 ms maximum
+  lag by default). These are downstream budgets, not measured end-to-end delay.
+  shairport emits early by the target plus *Additional output delay*, which is
+  for downstream DSP/device delay. Measure lip sync for the selected output.
+  The renderer uses bounded live queues and slow clock-drift correction;
+  normal file playback keeps its existing buffering.
+- **Now playing and control.** Title, artist, album, artwork, progress and volume
+  still come from the receiver's metadata pipe. The app shows AirPlay as the
+  active input independently of the chosen output. Queue takeover pauses the
+  sender. Classic AirPlay supports DACP play/pause/skip; AirPlay 2 supports
+  Kalinka-side pause/resume while the sender may keep sending. Seeking remains
+  on the sender. Artwork remains under `/content/airplay/art-*`.
 
-## Requirements
+## Requirements and migration
 
-Linux, Python 3.11+, and Kalinka server **5.9 or newer**, which brings plugin
-SDK 3.11 (`DirectPlaybackSession.show()` and `kalinka_plugin_sdk.live_capture`).
-The package will not install on an older server. The renderer needs Kalinka's
-live FLAC support, which it has had since SDK 3.5.
+Linux, Python 3.11+, SDK **3.21+**, and a matching Core and renderer implementing
+live PCM v1. Upgrade remote renderers too. A legacy renderer reports an upgrade
+requirement; there is no FLAC fallback. This migration must ship alongside the
+Core/renderer change, before installing the updated plugin.
 
-The server also needs `flac` and GNU `stdbuf` from coreutils. The plugin runs
-the encoder with unbuffered stdout so quiet audio and silence reach the
-renderer promptly. The packages and build dependency script install both.
+Legacy `flac_executable`, `cache_limit_mib` and `prebuffer_ms` settings are ignored
+and no longer shown. The live target replaces the old 500 ms startup prebuffer.
+`renderer_delay_ms` remains as an additional manual device/DSP delay, with a
+new default of zero. Review any saved override (including a previous 300 ms
+estimate) and retune it for this path rather than counting the old pipeline.
+The shairport-sync build retains its FFmpeg decoding dependencies; no transport
+encoder is needed. For networks unable to sustain PCM, use wired Ethernet.
 
 AirPlay 2 needs UDP ports 319 and 320 to itself for nqptp. When another PTP
 service holds them, or *Offer AirPlay 2* is off, Kalinka offers classic AirPlay
@@ -119,7 +108,9 @@ python -m ruff check src tests
 ```
 
 The tests run without shairport-sync: the receiver tests use stand-in
-executables and the real `flac` encoder, and skip when `flac` is not installed.
+executables and PCM source doubles. Frame-preservation tests include arbitrary
+pipe boundaries and nonzero low sample bits. Physical phone/Pi latency and
+CPU measurements remain hardware acceptance work.
 
 ## License
 

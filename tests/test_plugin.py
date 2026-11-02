@@ -2,8 +2,7 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
-from fakes import Direct
-from kalinka_plugin_sdk.live_capture import LiveCapture
+from fakes import Direct, LiveAudio
 from pydantic import ValidationError
 
 from kalinka_plugin_airplay import AirPlayConfig, KalinkaPluginAirPlay
@@ -48,7 +47,7 @@ async def running(tmp_path, monkeypatch):
     monkeypatch.setenv("KALINKA_PREFIX", str(tmp_path))
     plugin = KalinkaPluginAirPlay()
     config = AirPlayConfig(enabled=True, executable=str(tmp_path / "missing"))
-    await plugin.setup(SimpleNamespace(config=config, direct_playback=Direct()))
+    await plugin.setup(SimpleNamespace(config=config, direct_playback=Direct(), live_audio=LiveAudio()))
     yield plugin
     await plugin.shutdown()
 
@@ -70,13 +69,22 @@ async def test_cover_art_is_content(running):
     assert info.reader().read() == b"\xff\xd8 jpeg" and info.size == 7
 
 
-async def test_the_playing_segment_is_live_flac(running, tmp_path):
-    capture = LiveCapture(tmp_path)
-    running.service._segment = SimpleNamespace(id=capture.id, capture=capture)
+async def test_audio_is_owned_by_core_and_only_artwork_is_plugin_content(running):
+    running.service._segment = SimpleNamespace(id="source")
     try:
-        info = await running.get_interface().get_content_info(capture.id)
-        assert info.mime_type == "audio/flac" and info.live is capture
-        assert await running.get_interface().get_content_info("older") is None
+        assert await running.get_interface().get_content_info("source") is None
     finally:
         running.service._segment = None
-        await capture.retire()
+
+
+def test_old_encoder_and_prebuffer_settings_are_ignored():
+    config = AirPlayConfig(flac_executable="/missing", prebuffer_ms=1500, cache_limit_mib=128)
+    assert config.target_latency_ms == 60
+    assert not {"flac_executable", "prebuffer_ms", "cache_limit_mib"} & config.model_dump().keys()
+
+
+async def test_enabled_requires_core_live_support():
+    with pytest.raises(RuntimeError, match="live PCM"):
+        await KalinkaPluginAirPlay().setup(SimpleNamespace(
+            config=AirPlayConfig(enabled=True), direct_playback=Direct(), live_audio=None
+        ))

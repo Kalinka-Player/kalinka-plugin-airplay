@@ -1,20 +1,16 @@
 """The receiver end to end, with stand-in shairport-sync and nqptp executables."""
 
 import asyncio
-import shutil
 import stat
 import sys
 from pathlib import Path
 
 import pytest
-from fakes import Direct, Remote
+from fakes import Direct, LiveAudio, Remote
 
 from kalinka_plugin_airplay.receiver import Receiver, ReceiverOptions
 from kalinka_plugin_airplay.segment import segment_factory
 from kalinka_plugin_airplay.service import AirPlayService
-
-FLAC = shutil.which("flac")
-pytestmark = pytest.mark.skipif(FLAC is None, reason="the flac encoder is not installed")
 
 TESTS = Path(__file__).parent
 
@@ -66,14 +62,12 @@ def direct():
 def receiver(tmp_path, direct, *, name="Kalinka (test)", nqptp=NQPTP_BUSY):
     service = AirPlayService(
         direct,
-        segment_factory(FLAC, tmp_path, 1 << 24),
+        segment_factory(LiveAudio()),
         Remote(available=False),
-        prebuffer_ms=300,
     )
     options = ReceiverOptions(
         executable=executable(tmp_path / "shairport-sync", SHAIRPORT),
         nqptp_executable=executable(tmp_path / "nqptp", nqptp),
-        flac_executable=FLAC,
         name=name,
         port=7000,
         airplay2=True,
@@ -95,7 +89,7 @@ async def test_a_sender_plays_through_kalinka(tmp_path, direct):
     try:
         await until(lambda: direct.holds and direct.hold.named("play"))
         [(_, source, track)] = direct.hold.named("play")
-        assert source.source.asset_id == service.segment.id
+        assert source.reference.live_source_id == service.segment.id
         assert (track.title, track.performer.name) == ("Song", "Singer")
         assert service.segment.format.bits == 16
         assert service.status == "Playing from Test iPhone (classic AirPlay, ALAC 16-bit 44.1 kHz)"

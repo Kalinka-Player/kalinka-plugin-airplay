@@ -21,4 +21,4 @@ OpenSSL, libplist, libsodium, libgcrypt, libsoxr, libconfig, popt, libuuid and
 avahi-client, which the packages depend on rather than bundle; each is under
 its own terms, in `/usr/share/doc/<package>/copyright`.
 
-The FLAC encoder is the distribution's `flac` program, run per stream.
+No separate transport encoder is used.

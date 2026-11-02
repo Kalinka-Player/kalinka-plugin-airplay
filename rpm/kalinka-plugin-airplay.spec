@@ -15,17 +15,15 @@ Summary:        AirPlay receiver input for Kalinka Music Player
 License:        GPL-3.0-or-later AND MIT AND BSD-2-Clause AND GPL-2.0-only
 URL:            https://github.com/Kalinka-Player/kalinka-plugin-airplay
 # kalinka-server bundles the plugin SDK. The server skips the plugin when that
-# SDK does not satisfy its REQUIRES_SDK (>=3.11,<4).
+# SDK does not satisfy its REQUIRES_SDK (>=3.21,<4).
 Requires:       kalinka-server
 Requires:       python3 >= 3.11
-Requires:       flac
-Requires:       /usr/bin/stdbuf
 Requires:       avahi
 # rpmbuild adds the bundled binaries' shared-library requirements.
 
 %description
 Server-side AirPlay plugin: an iPhone, iPad or Mac plays through Kalinka's
-selected renderer, which pulls the audio from the server as a live FLAC
+selected renderer, which pulls the audio from the server as a live PCM
 stream. Bundles shairport-sync 5.5.2 with AirPlay 2 and nqptp 1.2.8, with
 their source.
 
