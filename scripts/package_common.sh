@@ -7,6 +7,11 @@
 use_native_build() {
     local native
     native="$(realpath -- "$1")"
+    if ! cmp -s "$root/patches/shairport-classic-password.patch" \
+        "$native/shairport-classic-password.patch"; then
+        echo "Rebuild native dependencies: this build lacks the current AirPlay password fix." >&2
+        exit 1
+    fi
     shairport="$native/shairport-sync/shairport-sync"
     nqptp="$native/nqptp/nqptp"
     sources=("$native"/shairport-sync-*.tar.gz "$native"/nqptp-*.tar.gz)

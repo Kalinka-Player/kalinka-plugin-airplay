@@ -1,7 +1,7 @@
 """shairport-sync as Kalinka runs it: what a build can do, and the config it gets."""
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .child import ChildError
@@ -85,16 +85,18 @@ class ReceiverSettings:
     airplay2: bool
     latency_offset_s: float
     metadata_pipe: Path
+    password: str = field(default="", repr=False)
 
 
 def render_config(settings: ReceiverSettings) -> str:
     """The libconfig text shairport-sync is started with."""
     service_type = "airplay2" if settings.airplay2 else "classic"
     rates = ", ".join(str(rate) for rate in OUTPUT_RATES)
+    password = f"  password = {_quote(settings.password)};\n" if settings.password else ""
     return f"""general =
 {{
   name = {_quote(settings.name)};
-  port = {settings.port};
+{password}  port = {settings.port};
   service_type = "{service_type}";
   output_backend = "stdout";
   ignore_volume_control = "yes";

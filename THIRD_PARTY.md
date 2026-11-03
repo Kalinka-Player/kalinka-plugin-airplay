@@ -1,10 +1,13 @@
 # Third-party components
 
 The plugin's Python code is GPL-3.0-or-later. Its packages bundle two native
-programs, built unmodified from pinned upstream commits by
+programs, built from pinned upstream commits by
 [`scripts/build-native.sh`](scripts/build-native.sh). The plugin starts them as
 separate processes and talks to them over pipes; none of their code is linked
 into Kalinka.
+
+Shairport Sync includes the narrowly scoped classic-password authorization fix
+documented in [`patches/README.md`](patches/README.md). nqptp is unmodified.
 
 | Component | Version and commit | License |
 |---|---|---|
@@ -12,7 +15,7 @@ into Kalinka.
 | [nqptp](https://github.com/mikebrady/nqptp) | 1.2.8, `c925f27c1fd12e4033ac477e5a405969b0b0260b` | GPL-2.0-only |
 
 Both packages ship the complete source of these two builds, as the archives
-`scripts/build-native.sh` makes from the pinned commits, in
+`scripts/build-native.sh` makes from the pinned commits and applied fixes, in
 `/usr/share/kalinka-plugin-airplay/source`. Each release attaches them too.
 
 shairport-sync is built without convolution, so it carries no GPL-3.0 code

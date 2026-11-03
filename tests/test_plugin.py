@@ -159,3 +159,42 @@ async def test_callback_timeout_does_not_cancel_receiver_shutdown(tmp_path, monk
     assert plugin.receiver is None and plugin.service is None
     assert (await plugin.snapshot()).state == "disabled"
     await plugin.shutdown()
+
+
+async def test_password_change_restarts_only_receiver_and_can_be_cleared(tmp_path, monkeypatch):
+    from unittest.mock import Mock
+
+    import kalinka_plugin_airplay as airplay
+
+    monkeypatch.setenv("KALINKA_PREFIX", str(tmp_path))
+    monkeypatch.setattr(airplay.Receiver, "start", Mock())
+    config = AirPlayConfig(enabled=True, password="configured secret")
+    assert AirPlayConfig.model_fields["password"].json_schema_extra["widget"] == "password"
+    assert "configured secret" not in repr(config)
+    plugin = KalinkaPluginAirPlay()
+    await plugin.setup(SimpleNamespace(config=config, direct_playback=Direct(), live_audio=LiveAudio()))
+    try:
+        first = plugin.receiver
+        assert first._options.password == "configured secret"
+        first.running = True
+        assert (await plugin.snapshot()).password_required
+        assert await plugin.reveal_password() == "configured secret"
+        assert "configured secret" not in (await plugin.snapshot()).model_dump_json()
+        config.password = "new secret"
+        await plugin.config_changed({"password"})
+        assert plugin.receiver is not first
+        assert plugin.receiver._options.password == "new secret"
+        assert plugin.enabled and plugin.context.config is config
+        config.password = ""
+        await plugin.config_changed({"password"})
+        assert not (await plugin.snapshot()).password_required
+        assert not (await plugin.snapshot()).password_reveal_available
+        assert plugin.receiver._options.password == ""
+    finally:
+        await plugin.shutdown()
+
+
+@pytest.mark.parametrize("password", ["bad\nline", "bad\x00value", "x" * 129])
+def test_invalid_password_cannot_inject_config(password):
+    with pytest.raises(ValidationError):
+        AirPlayConfig(password=password)

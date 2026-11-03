@@ -13,7 +13,8 @@ Copyright: 2011-2013 James Laird <jhl@mafipulation.org>
  pair_ap contributors
 License: MIT AND BSD-2-Clause AND GPL-2.0-only
 Comment: shairport-sync 5.5.2, https://github.com/mikebrady/shairport-sync,
- commit 7bad231c18368dbd26f298577f6210e36e4b0797, unmodified, built by
+ commit 7bad231c18368dbd26f298577f6210e36e4b0797, with the classic-password
+ authorization fix in patches/shairport-classic-password.patch, built by
  scripts/build-native.sh with AirPlay 2, stdout output and the metadata pipe,
  without convolution. Shairport Sync and pair_ap are MIT; tinyhttp is
  BSD-2-Clause; nqptp-shm-structures.h, compiled in for AirPlay 2, is
