@@ -1,7 +1,7 @@
 """AirPlay receiver input for Kalinka."""
 
+import asyncio
 import io
-import socket
 from pathlib import Path
 from typing import ClassVar
 
@@ -13,6 +13,11 @@ from kalinka_plugin_sdk.live_audio import LivePolicy
 from kalinka_plugin_sdk.module_config import ModuleConfig
 from kalinka_plugin_sdk.module_health import ModuleHealthState, ModuleState
 from kalinka_plugin_sdk.plugin import InputModulePlugin
+from kalinka_plugin_sdk.receiver_control import (
+    ReceiverDescriptor,
+    ReceiverError,
+    ReceiverSnapshot,
+)
 from pydantic import ConfigDict, Field, model_validator
 
 from .receiver import Receiver, ReceiverOptions
@@ -39,16 +44,15 @@ class AirPlayConfig(ModuleConfig):
     enabled: bool = Field(
         default=False,
         title="Enable AirPlay",
-        json_schema_extra={"importance": "simple"},
+        json_schema_extra={"importance": "simple", "applies_live": True},
     )
     device_name: str = Field(
-        default_factory=lambda: f"Kalinka ({socket.gethostname()})",
-        min_length=1,
+        default="",
         max_length=50,
-        pattern=r"^[^\x00-\x1f]+$",
+        pattern=r"^[^\x00-\x1f\x7f]*$",
         title="AirPlay speaker name",
-        description="Name shown in the AirPlay menu. Choose the output in Kalinka's renderer selector.",
-        json_schema_extra={"importance": "simple"},
+        description="Leave empty to follow the streamer name. Changing it ends the current AirPlay session.",
+        json_schema_extra={"importance": "simple", "applies_live": True},
     )
     airplay2: bool = Field(
         default=True,
@@ -112,7 +116,12 @@ class AirPlayInput(InputModule):
 
 class KalinkaPluginAirPlay(InputModulePlugin):
     PLUGIN_ID = MODULE
-    REQUIRES_SDK = ">=3.21,<4"
+    REQUIRES_SDK = ">=3.22,<4"
+    SETUP_WHEN_DISABLED = True
+    RECEIVER = ReceiverDescriptor(
+        title="AirPlay", kind="airplay",
+        instructions="Choose this speaker in your device's AirPlay menu. Devices on the network can play here.",
+    )
     CONFIG_MODEL = AirPlayConfig
     DYNAMIC_FIELDS: ClassVar[dict[str, DynamicFieldDecl]] = {
         "receiver_status": DynamicFieldDecl(section_id="", label="Receiver status", widget="text"),
@@ -122,20 +131,87 @@ class KalinkaPluginAirPlay(InputModulePlugin):
         self.service = None
         self.receiver = None
         self.enabled = False
+        self.context = None
+        self._lock = asyncio.Lock()
+        self._watcher = None
+        self._name = None
+        self._transition = None
+        self._configure_task = None
+        self._config_dirty = False
+        self._closing = False
+        self._lifecycle_error = None
         self.interface = AirPlayInput(self)
 
     def get_interface(self):
         return self.interface
 
+    def get_receiver_control(self):
+        return self
+
+    def _notify(self):
+        callback = getattr(self.context, "receiver_changed", None)
+        if callback:
+            callback()
+
+    def _desired_name(self):
+        read = getattr(self.context, "server_name", None)
+        name = self.context.config.device_name.strip() or (read() if read else "Kalinka")
+        return "".join(c for c in name if ord(c) >= 32 and ord(c) != 127)[:50] or "Kalinka"
+
     async def setup(self, context):
-        config = AirPlayConfig(**context.config.model_dump())
-        self.enabled = config.enabled
-        if not config.enabled:
+        self.context = context
+        await self.config_changed(frozenset({"enabled"}))
+
+    async def config_changed(self, changed):
+        if not {"enabled", "device_name"} & changed or self._closing:
             return
+        self._config_dirty = True
+        if self._configure_task is None or self._configure_task.done():
+            self._configure_task = asyncio.create_task(self._configure())
+            # Retrieve an orphaned failure after Core's callback budget expires;
+            # snapshot/get_state retain its reason for the next client read.
+            self._configure_task.add_done_callback(
+                lambda task: None if task.cancelled() else task.exception()
+            )
+        await asyncio.shield(self._configure_task)
+
+    async def _configure(self):
+        async with self._lock:
+            while self._config_dirty and not self._closing:
+                self._config_dirty = False
+                enabled = self.context.config.enabled
+                name = self._desired_name()
+                if enabled == self.enabled and (not enabled or name == self._name):
+                    continue
+                self.enabled = enabled
+                self._transition = "starting" if enabled else "stopping"
+                self._lifecycle_error = None
+                self._notify()
+                try:
+                    await self._stop()
+                    # A newer saved setting may have arrived during shutdown.
+                    self.enabled = self.context.config.enabled and not self._closing
+                    if self.enabled:
+                        self._start(self._desired_name())
+                except Exception as error:
+                    self._lifecycle_error = str(error)
+                    raise
+                finally:
+                    self._transition = None
+                    self._notify()
+
+    async def server_name_changed(self):
+        if not self.context.config.device_name.strip():
+            await self.config_changed(frozenset({"device_name"}))
+
+    def _start(self, name):
+        context = self.context
+        config = AirPlayConfig(**context.config.model_dump())
         if context.direct_playback is None:
             raise RuntimeError("AirPlay requires Kalinka direct playback")
         if context.live_audio is None:
-            raise RuntimeError("AirPlay requires Kalinka live PCM support (SDK 3.21)")
+            raise RuntimeError("AirPlay requires Kalinka live PCM support (SDK 3.22)")
+        self._name = name
         self.service = AirPlayService(
             context.direct_playback,
             segment_factory(context.live_audio),
@@ -146,7 +222,7 @@ class KalinkaPluginAirPlay(InputModulePlugin):
             ReceiverOptions(
                 executable=config.executable,
                 nqptp_executable=config.nqptp_executable,
-                name=config.device_name,
+                name=name,
                 port=config.port,
                 airplay2=config.airplay2,
                 # Audio leaves early by as much as Kalinka delays it, for lip sync.
@@ -156,6 +232,39 @@ class KalinkaPluginAirPlay(InputModulePlugin):
             Path(paths.state_dir()) / MODULE,
         )
         self.receiver.start()
+        self._watcher = asyncio.create_task(self._watch())
+
+    async def _watch(self):
+        # Observe only control state, never PCM or playback-position updates.
+        previous = None
+        while True:
+            snapshot = await self.snapshot()
+            if snapshot != previous:
+                previous = snapshot
+                self._notify()
+            await asyncio.sleep(1)
+
+    async def snapshot(self):
+        receiver = self.receiver
+        error = self._lifecycle_error or (receiver.error if receiver else None)
+        state = self._transition or (
+            "disabled" if not self.enabled else
+            "error" if error or receiver is None else
+            "ready" if receiver.running else "starting"
+        )
+        session = self.service.receiver_session if self.service else None
+        return ReceiverSnapshot(
+            enabled=self.enabled, state=state,
+            message=error or (self.service.output_error if self.service else None),
+            effective_name=self._name if self.enabled else self._desired_name(),
+            name_inherited=not bool(self.context.config.device_name.strip()),
+            # A running child is not confirmation of mDNS advertisement.
+            visibility="unknown" if self.enabled else "hidden",
+            sessions=[session] if session else [],
+        )
+
+    async def execute(self, command):
+        raise ReceiverError("unsupported_operation", "AirPlay availability is controlled by its enabled setting")
 
     async def resolve_dynamic_field(self, path):
         if path == "receiver_status":
@@ -165,6 +274,8 @@ class KalinkaPluginAirPlay(InputModulePlugin):
     async def get_state(self):
         if not self.enabled:
             return ModuleState(state=ModuleHealthState.DISABLED)
+        if self._lifecycle_error:
+            return ModuleState(state=ModuleHealthState.ERROR, message=self._lifecycle_error)
         if self.receiver is None:
             return ModuleState(state=ModuleHealthState.ERROR, message="Not started")
         if self.receiver.error:
@@ -174,8 +285,22 @@ class KalinkaPluginAirPlay(InputModulePlugin):
             return ModuleState(state=ModuleHealthState.WARNING, message=warning)
         return ModuleState(state=ModuleHealthState.READY, message=self.receiver.status)
 
-    async def shutdown(self):
+    async def _stop(self):
+        if self._watcher:
+            self._watcher.cancel()
+            await asyncio.gather(self._watcher, return_exceptions=True)
+            self._watcher = None
         if self.receiver:
             await self.receiver.stop()
         if self.service:
             await self.service.close()
+        self.receiver = self.service = None
+
+    async def shutdown(self):
+        self._closing = True
+        if self._configure_task:
+            await asyncio.gather(self._configure_task, return_exceptions=True)
+        async with self._lock:
+            self.enabled = False
+            await self._stop()
+        self._notify()
