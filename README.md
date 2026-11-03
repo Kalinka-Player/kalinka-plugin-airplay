@@ -39,7 +39,7 @@ disk audio cache, or plugin-side prebuffer, for either local or remote outputs.
 
 ## Requirements and migration
 
-Linux, Python 3.11+, SDK **3.22+**, and a matching Core and renderer implementing
+Linux, Python 3.11+, SDK **3.23+**, and a matching Core and renderer implementing
 live PCM v1. Upgrade remote renderers too. A legacy renderer reports an upgrade
 requirement; there is no FLAC fallback. This migration must ship alongside the
 Core/renderer change, before installing the updated plugin.
@@ -112,23 +112,41 @@ executables and PCM source doubles. Frame-preservation tests include arbitrary
 pipe boundaries and nonzero low sample bits. Physical phone/Pi latency and
 CPU measurements remain hardware acceptance work.
 
+The Debian CI build also runs `python3 scripts/check-native-password.py
+build/native/shairport-sync/shairport-sync` with D-Bus and Avahi in its container.
+It tests absent/wrong/correct passwords, OPTIONS before authentication, a new
+connection after successful authentication, and removing the password. The
+bundled native build includes the [classic authentication fix](patches/README.md)
+and ships its patched source. Rebuild native dependencies before packaging this
+version; old cached native builds are refused.
+
 ## License
 
 GPL-3.0-or-later. The bundled programs keep their own licenses; see
 [`THIRD_PARTY.md`](THIRD_PARTY.md).
 
 
-## Live receiver controls
+## Live receiver controls and password
 
-With Core API 0.22 / SDK 3.22 and the companion app, **Connect a device** on Home
-or in the server menu shows this receiver independently of catalogs and the
-chosen output. Enable/disable takes effect without a Core restart, including
-first enable after boot. Disabling ends the current AirPlay session and stays
-off across a restart.
+Core API 0.23 / SDK 3.23 exposes enabled receivers through **Connect** in the
+mobile music-source strip and individually under Connect in the wide sidebar.
+The panel shows the receiver name, same-network instructions, actual sessions
+and whether a password is required. Enable/disable remains in Configuration
+and applies without a Core restart.
 
-Leave the AirPlay name empty to follow the streamer name, or set an explicit
-override. Renaming restarts only the owned receiver and ends any AirPlay session.
-The panel shows sender sessions but offers no Bluetooth-style pairing, grants
-or unpairing. Availability on the network is not a per-sender permission list.
-A running shairport process reports readiness; mDNS visibility stays unknown
-until independently confirmed. No temporary “stop receiving” switch is exposed.
+**AirPlay password** is a persistent secret setting. Empty means no password;
+a configured value becomes Shairport Sync's `general.password` in its private
+0600 config file. Applying a password or name change restarts only the owned
+receiver and ends the current AirPlay session. The settings help explains this.
+
+The panel's **Show / Hide password** explicitly reveals the applied password
+through the management API, with a non-cacheable response. Normal config reads,
+receiver snapshots and events never include it. The app clears the revealed
+copy on close, background or lost availability. There are no temporary PINs,
+Bluetooth approvals or per-device AirPlay audio grants.
+
+Leave the receiver name empty to follow the streamer name. A running Shairport
+process reports readiness; mDNS collision-renaming is not independently observed.
+Classic password enforcement has a native RTSP regression check. Real Apple
+sender interoperability, AP2 password pairing and audio reconnect behavior still
+require hardware acceptance in addition to the config and lifecycle tests.

@@ -5,7 +5,7 @@ import logging
 import os
 import stat
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -29,6 +29,7 @@ class ReceiverOptions:
     port: int
     airplay2: bool
     latency_offset_s: float
+    password: str = field(default="", repr=False)
 
 
 class MetadataPipe:
@@ -196,9 +197,11 @@ class Receiver:
                 airplay2=airplay2,
                 latency_offset_s=options.latency_offset_s,
                 metadata_pipe=pipe_path,
+                password=options.password,
             )
         )
         descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        os.fchmod(descriptor, 0o600)
         with os.fdopen(descriptor, "w") as file:
             file.write(text)
         return path

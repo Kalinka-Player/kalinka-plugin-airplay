@@ -47,6 +47,13 @@ jobs:
       - run: ./scripts/install-build-deps.sh
       - name: Build pinned shairport-sync and nqptp
         run: ./scripts/build-native.sh
+      - name: Check native password authentication
+        run: |
+          apt-get install -y --no-install-recommends dbus avahi-daemon
+          mkdir -p /run/dbus
+          test -S /run/dbus/system_bus_socket || dbus-daemon --system --fork
+          avahi-daemon --check || avahi-daemon --daemonize --no-drop-root --no-chroot
+          python3 scripts/check-native-password.py build/native/shairport-sync/shairport-sync
       - name: Build and inspect Debian package
         run: |
           python3 -m venv "$RUNNER_TEMP/venv"

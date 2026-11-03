@@ -38,6 +38,15 @@ fetch() {
 fetch shairport-sync https://github.com/mikebrady/shairport-sync.git "$shairport_tag" "$shairport_commit"
 fetch nqptp https://github.com/mikebrady/nqptp.git "$nqptp_tag" "$nqptp_commit"
 
+# An AP2 OPTIONS reply must not authorize a later classic AirPlay session.
+git -C "$work/shairport-sync" apply "$root/patches/shairport-classic-password.patch"
+# Ship the actual modified corresponding source, before generating build files.
+(
+    cd "$work/shairport-sync"
+    git ls-files -z | tar --null -T - --transform="s,^,shairport-sync-$shairport_tag/," \
+        -czf "../shairport-sync-$shairport_tag.tar.gz"
+)
+
 jobs="$(nproc)"
 (
     cd "$work/nqptp"
@@ -60,5 +69,7 @@ for feature in AirPlay2 Avahi stdout metadata; do
         exit 1
     fi
 done
+# Packaging rejects older cached native builds that do not include this fix.
+cp "$root/patches/shairport-classic-password.patch" "$work/"
 printf 'Built %s/shairport-sync/shairport-sync (%s)\n' "$work" "$version"
 printf 'Built %s/nqptp/nqptp\n' "$work"

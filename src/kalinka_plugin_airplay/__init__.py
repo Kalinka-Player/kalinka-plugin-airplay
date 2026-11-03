@@ -54,6 +54,12 @@ class AirPlayConfig(ModuleConfig):
         description="Leave empty to follow the streamer name. Changing it ends the current AirPlay session.",
         json_schema_extra={"importance": "simple", "applies_live": True},
     )
+    password: str = Field(
+        default="", max_length=128, pattern=r"^[^\x00-\x1f\x7f]*$", repr=False,
+        title="AirPlay password",
+        description="Leave empty for no password. Applying a change restarts AirPlay and ends its current session; Kalinka keeps running.",
+        json_schema_extra={"widget": "password", "importance": "simple", "applies_live": True},
+    )
     airplay2: bool = Field(
         default=True,
         title="Offer AirPlay 2",
@@ -116,11 +122,11 @@ class AirPlayInput(InputModule):
 
 class KalinkaPluginAirPlay(InputModulePlugin):
     PLUGIN_ID = MODULE
-    REQUIRES_SDK = ">=3.22,<4"
+    REQUIRES_SDK = ">=3.23,<4"
     SETUP_WHEN_DISABLED = True
     RECEIVER = ReceiverDescriptor(
         title="AirPlay", kind="airplay",
-        instructions="Choose this speaker in your device's AirPlay menu. Devices on the network can play here.",
+        instructions="Choose this speaker in your device's AirPlay menu on the same network.",
     )
     CONFIG_MODEL = AirPlayConfig
     DYNAMIC_FIELDS: ClassVar[dict[str, DynamicFieldDecl]] = {
@@ -130,6 +136,7 @@ class KalinkaPluginAirPlay(InputModulePlugin):
     def __init__(self):
         self.service = None
         self.receiver = None
+        self._password = ""
         self.enabled = False
         self.context = None
         self._lock = asyncio.Lock()
@@ -163,7 +170,7 @@ class KalinkaPluginAirPlay(InputModulePlugin):
         await self.config_changed(frozenset({"enabled"}))
 
     async def config_changed(self, changed):
-        if not {"enabled", "device_name"} & changed or self._closing:
+        if not {"enabled", "device_name", "password"} & changed or self._closing:
             return
         self._config_dirty = True
         if self._configure_task is None or self._configure_task.done():
@@ -181,7 +188,7 @@ class KalinkaPluginAirPlay(InputModulePlugin):
                 self._config_dirty = False
                 enabled = self.context.config.enabled
                 name = self._desired_name()
-                if enabled == self.enabled and (not enabled or name == self._name):
+                if enabled == self.enabled and (not enabled or (name == self._name and self.context.config.password == self._password)):
                     continue
                 self.enabled = enabled
                 self._transition = "starting" if enabled else "stopping"
@@ -210,8 +217,9 @@ class KalinkaPluginAirPlay(InputModulePlugin):
         if context.direct_playback is None:
             raise RuntimeError("AirPlay requires Kalinka direct playback")
         if context.live_audio is None:
-            raise RuntimeError("AirPlay requires Kalinka live PCM support (SDK 3.22)")
+            raise RuntimeError("AirPlay requires Kalinka live PCM support (SDK 3.23)")
         self._name = name
+        self._password = config.password
         self.service = AirPlayService(
             context.direct_playback,
             segment_factory(context.live_audio),
@@ -223,6 +231,7 @@ class KalinkaPluginAirPlay(InputModulePlugin):
                 executable=config.executable,
                 nqptp_executable=config.nqptp_executable,
                 name=name,
+                password=config.password,
                 port=config.port,
                 airplay2=config.airplay2,
                 # Audio leaves early by as much as Kalinka delays it, for lip sync.
@@ -261,7 +270,14 @@ class KalinkaPluginAirPlay(InputModulePlugin):
             # A running child is not confirmation of mDNS advertisement.
             visibility="unknown" if self.enabled else "hidden",
             sessions=[session] if session else [],
+            password_required=bool(self.context.config.password),
+            password_reveal_available=state == "ready" and bool(self._password),
         )
+
+    async def reveal_password(self):
+        if self._transition or not self.enabled or not self.receiver or not self.receiver.running:
+            raise ReceiverError("unavailable", "AirPlay is not ready")
+        return self._password
 
     async def execute(self, command):
         raise ReceiverError("unsupported_operation", "AirPlay availability is controlled by its enabled setting")

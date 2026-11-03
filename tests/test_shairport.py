@@ -90,3 +90,11 @@ def test_config_for_classic_airplay():
 def test_a_name_cannot_break_out_of_its_string():
     text = render_config(settings(name='Den "TV" \\ room'))
     assert 'name = "Den \\"TV\\" \\\\ room";' in text
+
+
+@pytest.mark.parametrize("airplay2", [False, True])
+def test_config_enforces_configured_password_in_both_protocol_modes(airplay2):
+    text = render_config(settings(airplay2=airplay2, password='Den "secret" \\ room'))
+    general = text.split('stdout =')[0]
+    assert 'password = "Den \\"secret\\" \\\\ room";' in general
+    assert 'password =' not in render_config(settings(password=""))
