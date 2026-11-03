@@ -6,6 +6,7 @@ import logging
 import time
 from collections import OrderedDict
 from typing import Awaitable, Callable, Optional
+from uuid import uuid4
 
 from kalinka_plugin_sdk.datamodel import (
     Album,
@@ -27,6 +28,7 @@ from kalinka_plugin_sdk.direct_playback import (
     TransportRequest,
 )
 from kalinka_plugin_sdk.live_audio import LivePolicy
+from kalinka_plugin_sdk.receiver_control import ReceiverSession
 
 from .metadata import (
     PROGRESS_RATE,
@@ -152,6 +154,7 @@ class AirPlayService:
         self._suspended = False
         self._volume: Optional[int] = None
         self._sender: Optional[str] = None
+        self._session_id: Optional[str] = None
         self._meta: Optional[TrackChanged] = None
         self._duration_ms = 0
         self._artwork_id: Optional[str] = None
@@ -161,6 +164,15 @@ class AirPlayService:
     @property
     def segment(self) -> Optional[Segment]:
         return self._segment
+
+    @property
+    def receiver_session(self):
+        if self._session_id is None:
+            return None
+        return ReceiverSession(
+            session_id=self._session_id, name=self._sender or "AirPlay sender",
+            playing=self._segment_playing and not self._suspended,
+        )
 
     @property
     def status(self) -> str:
@@ -202,6 +214,7 @@ class AirPlayService:
     async def _event(self, event: Event) -> None:
         match event:
             case PlayBegan():
+                self._session_id = uuid4().hex
                 self._suspended = False
                 # The session's format comes with its first frame.
                 self._format = self._stream = None
@@ -368,6 +381,7 @@ class AirPlayService:
             self._cutting -= 1
 
     async def _end_session(self) -> None:
+        self._session_id = None
         self._suspended = True
         self._format = None
         await self._end_segment()

@@ -39,7 +39,7 @@ disk audio cache, or plugin-side prebuffer, for either local or remote outputs.
 
 ## Requirements and migration
 
-Linux, Python 3.11+, SDK **3.21+**, and a matching Core and renderer implementing
+Linux, Python 3.11+, SDK **3.22+**, and a matching Core and renderer implementing
 live PCM v1. Upgrade remote renderers too. A legacy renderer reports an upgrade
 requirement; there is no FLAC fallback. This migration must ship alongside the
 Core/renderer change, before installing the updated plugin.
@@ -116,3 +116,19 @@ CPU measurements remain hardware acceptance work.
 
 GPL-3.0-or-later. The bundled programs keep their own licenses; see
 [`THIRD_PARTY.md`](THIRD_PARTY.md).
+
+
+## Live receiver controls
+
+With Core API 0.22 / SDK 3.22 and the companion app, **Connect a device** on Home
+or in the server menu shows this receiver independently of catalogs and the
+chosen output. Enable/disable takes effect without a Core restart, including
+first enable after boot. Disabling ends the current AirPlay session and stays
+off across a restart.
+
+Leave the AirPlay name empty to follow the streamer name, or set an explicit
+override. Renaming restarts only the owned receiver and ends any AirPlay session.
+The panel shows sender sessions but offers no Bluetooth-style pairing, grants
+or unpairing. Availability on the network is not a per-sender permission list.
+A running shairport process reports readiness; mDNS visibility stays unknown
+until independently confirmed. No temporary “stop receiving” switch is exposed.
