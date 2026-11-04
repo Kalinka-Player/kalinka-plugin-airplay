@@ -1,12 +1,12 @@
 name: Companion Kalinka core
-description: Check out the Kalinka core with SDK 3.23 and receiver authentication into ./core.
+description: Check out the Kalinka core with SDK 3.21 and receiver authentication into ./core.
 runs:
   using: composite
   steps:
     - uses: actions/checkout@v4
       with:
         repository: Kalinka-Player/KalinkaPlayer
-        # Pin the companion SDK 3.23 / receiver authentication during review.
+        # Pin the companion SDK 3.21 / receiver authentication during review.
         ref: ac9b68f4d37b55e3e9238464da8ef74660097629
         path: core
         fetch-depth: 0

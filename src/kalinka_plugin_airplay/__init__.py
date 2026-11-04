@@ -122,7 +122,7 @@ class AirPlayInput(InputModule):
 
 class KalinkaPluginAirPlay(InputModulePlugin):
     PLUGIN_ID = MODULE
-    REQUIRES_SDK = ">=3.23,<4"
+    REQUIRES_SDK = ">=3.21,<4"
     SETUP_WHEN_DISABLED = True
     RECEIVER = ReceiverDescriptor(
         title="AirPlay", kind="airplay",
@@ -217,7 +217,7 @@ class KalinkaPluginAirPlay(InputModulePlugin):
         if context.direct_playback is None:
             raise RuntimeError("AirPlay requires Kalinka direct playback")
         if context.live_audio is None:
-            raise RuntimeError("AirPlay requires Kalinka live PCM support (SDK 3.23)")
+            raise RuntimeError("AirPlay requires Kalinka live PCM support (SDK 3.21)")
         self._name = name
         self._password = config.password
         self.service = AirPlayService(

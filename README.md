@@ -39,7 +39,7 @@ disk audio cache, or plugin-side prebuffer, for either local or remote outputs.
 
 ## Requirements and migration
 
-Linux, Python 3.11+, SDK **3.23+**, and a matching Core and renderer implementing
+Linux, Python 3.11+, SDK **3.21+**, and a matching Core and renderer implementing
 live PCM v1. Upgrade remote renderers too. A legacy renderer reports an upgrade
 requirement; there is no FLAC fallback. This migration must ship alongside the
 Core/renderer change, before installing the updated plugin.
@@ -128,7 +128,7 @@ GPL-3.0-or-later. The bundled programs keep their own licenses; see
 
 ## Live receiver controls and password
 
-Core API 0.23 / SDK 3.23 exposes enabled receivers through **Connect** in the
+Core API 0.22 / SDK 3.21 exposes enabled receivers through **Connect** in the
 mobile music-source strip and individually under Connect in the wide sidebar.
 The panel shows the receiver name, same-network instructions, actual sessions
 and whether a password is required. Enable/disable remains in Configuration
