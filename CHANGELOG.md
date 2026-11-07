@@ -4,10 +4,18 @@ Curated, user-facing notes per release. Add a `## <version>` section before tagg
 
 ## Unreleased
 
+## 0.3.0
+
 - Forward receiver PCM through Core live audio without FLAC encoding, disk
   spooling, 16-bit narrowing or a startup prebuffer.
 - Keep capture and input ownership across renderer changes; drain independently
   of output acquisition and retry while an output is unavailable.
+- Connect shows this receiver independently of catalogs and the chosen output:
+  enable or disable it without a Core restart, rename it or leave the name
+  empty to follow the streamer's own.
+- Set an AirPlay password, or leave it empty for none. Show/Hide on the panel
+  reveals the applied password on demand through the management API; normal
+  config reads, receiver snapshots and events never include it.
 - Requires SDK 3.21 and matching Core/renderers with live PCM v1. Retire encoder,
   cache and prebuffer settings; review saved renderer-delay tuning after upgrade.
 
